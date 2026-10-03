@@ -4,17 +4,14 @@
 // site's own GraphQL responses on the My Activity pages, so Seek's page handles its own auth token.
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { launchPersistentContext } from "cloakbrowser";
 import type { BrowserContext, Page, Response } from "playwright-core";
 import { readChromeCookies } from "./chrome-cookies.js";
+import { readChromeLocalStorage } from "./chrome-storage.js";
 
 export const ORIGIN = "https://nz.seek.com";
 const PROFILE_DIR = process.env.SEEK_PROFILE_DIR ?? join(homedir(), ".cloakbrowser-profiles", "seek");
-// A one-time hand-over of Seek's Auth0 sign-in (its localStorage entries, incl. the refresh token).
-// Seek keeps the session there, not in cookies, so copied Chrome cookies alone land on login.seek.com.
-// The file is deleted once imported: Auth0 rotates the refresh token, so only one profile may hold it.
-const AUTH_HANDOVER = process.env.SEEK_AUTH_FILE ?? join(homedir(), ".cloakbrowser-profiles", "seek-auth.json");
 const COOKIE_SITES = ["seek.com", "seek.co.nz"];
 const IDLE_CLOSE_MS = 5 * 60_000;
 
@@ -58,9 +55,10 @@ export class SeekBrowser {
         this.page = null;
       });
       await this.refreshCookies();
+      this.page = this.context.pages()[0] ?? (await this.context.newPage());
+      await this.importChromeSignIn(this.page);
     }
     this.page = this.context.pages()[0] ?? (await this.context.newPage());
-    await this.importAuthHandover(this.page);
     return this.page;
   }
 
@@ -78,18 +76,27 @@ export class SeekBrowser {
     }
   }
 
-  private async importAuthHandover(page: Page): Promise<void> {
-    if (!existsSync(AUTH_HANDOVER)) return;
-    const { origin, localStorage: entries } = JSON.parse(readFileSync(AUTH_HANDOVER, "utf8")) as {
-      origin: string;
-      localStorage: Record<string, string>;
-    };
-    await page.goto(`${origin}/`, { waitUntil: "domcontentloaded" });
-    await page.evaluate((items) => {
-      for (const [k, v] of Object.entries(items)) localStorage.setItem(k, v);
-    }, entries);
-    rmSync(AUTH_HANDOVER, { force: true });
-    log(`imported Seek sign-in (${Object.keys(entries).length} entries) and removed the hand-over file`);
+  /**
+   * Seek keeps its sign-in in localStorage (Auth0's `@@auth0spajs@@…` entries, incl. the refresh
+   * token), not in cookies, so cookies alone always land on login.seek.com. Take the entries from
+   * the user's signed-in Chrome on every launch, so this browser is signed in exactly as Chrome is.
+   */
+  private async importChromeSignIn(page: Page): Promise<void> {
+    try {
+      const entries = await readChromeLocalStorage(ORIGIN, "@@auth0spajs@@");
+      if (!Object.keys(entries).length) {
+        log("Chrome has no Seek sign-in; logged-in tools will ask for a login");
+        return;
+      }
+      await page.goto(`${ORIGIN}/`, { waitUntil: "domcontentloaded" });
+      await page.evaluate((items) => {
+        for (const k of Object.keys(localStorage)) if (k.startsWith("@@auth0spajs@@")) localStorage.removeItem(k);
+        for (const [k, v] of Object.entries(items)) localStorage.setItem(k, v);
+      }, entries);
+      log(`took Seek sign-in from Chrome (${Object.keys(entries).length} entries)`);
+    } catch (e) {
+      log("could not read Chrome's Seek sign-in:", (e as Error).message);
+    }
   }
 
   async close(): Promise<void> {
