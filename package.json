@@ -1,0 +1,30 @@
+{
+  "name": "seek-mcp",
+  "version": "0.1.0",
+  "description": "Seek NZ jobs MCP server on CloakBrowser",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build": "tsc"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.0",
+    "cloakbrowser": "^0.5.11",
+    "playwright-core": "1.58",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.1",
+    "typescript": "^5.9.3"
+  },
+  "bin": {
+    "seek-mcp": "dist/server.js"
+  },
+  "engines": {
+    "node": ">=22.13"
+  }
+}

@@ -1,0 +1,12 @@
+import { launchPersistentContext } from "cloakbrowser";
+import { readChromeCookies } from "./dist/chrome-cookies.js";
+const ctx = await launchPersistentContext({ userDataDir: process.env.HOME + "/.cloakbrowser-profiles/seek", headless: true, locale: "en-NZ", timezone: "Pacific/Auckland" });
+await ctx.addCookies(readChromeCookies(["seek.com","seek.co.nz"]));
+const page = ctx.pages()[0] ?? await ctx.newPage();
+const t0 = Date.now(); const ts = () => ((Date.now()-t0)/1000).toFixed(1)+"s";
+page.on("framenavigated", f => { if (f === page.mainFrame()) console.log(ts(), "NAV", f.url().slice(0,110)); });
+page.on("response", async r => { if (!r.url().endsWith("/graphql")) return; let op="?"; try { op = JSON.parse(r.request().postData()).operationName } catch {} ; let note=""; if (/Saved|Applied/.test(op)) { try { const b = await r.json(); note = b.errors ? "ERRORS: "+JSON.stringify(b.errors).slice(0,200) : "ok edges="+(b.data?.viewer?.savedJobs ?? b.data?.viewer?.appliedJobs)?.edges?.length; } catch(e) { note = "unreadable"; } } console.log(ts(), "GQL", op, r.status(), note); });
+await page.goto("https://nz.seek.com/my-activity/saved-jobs", { waitUntil: "domcontentloaded" }).catch(e => console.log("goto threw", e.message.split("\n")[0]));
+await page.waitForTimeout(12000);
+console.log(ts(), "final", page.url().slice(0,100));
+await ctx.close();
