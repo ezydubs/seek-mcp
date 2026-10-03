@@ -2,7 +2,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { SeekBrowser, job, search } from "./seek.js";
+import { SeekBrowser, appliedJobs, job, savedJobs, search } from "./seek.js";
 
 const browser = new SeekBrowser();
 const server = new McpServer({ name: "seek", version: "0.1.0" });
@@ -56,8 +56,35 @@ server.registerTool(
   },
 );
 
-// seek_saved_jobs / seek_applied_jobs (savedJobs, appliedJobs in seek.ts) stay unregistered until a fresh
-// profile can complete Seek's login: copied Chrome cookies alone still land on login.seek.com.
+server.registerTool(
+  "seek_saved_jobs",
+  {
+    description: "The user's saved jobs on Seek (signed in as them).",
+    inputSchema: {},
+  },
+  async () => {
+    try {
+      return ok(await browser.run((page) => savedJobs(page)));
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+server.registerTool(
+  "seek_applied_jobs",
+  {
+    description: "Jobs the user has applied for on Seek, with application dates and status history.",
+    inputSchema: {},
+  },
+  async () => {
+    try {
+      return ok(await browser.run((page) => appliedJobs(page)));
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
 
 const shutdown = async () => {
   await browser.close();

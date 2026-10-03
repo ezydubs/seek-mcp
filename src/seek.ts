@@ -4,13 +4,17 @@
 // site's own GraphQL responses on the My Activity pages, so Seek's page handles its own auth token.
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { launchPersistentContext } from "cloakbrowser";
 import type { BrowserContext, Page, Response } from "playwright-core";
 import { readChromeCookies } from "./chrome-cookies.js";
 
 export const ORIGIN = "https://nz.seek.com";
 const PROFILE_DIR = process.env.SEEK_PROFILE_DIR ?? join(homedir(), ".cloakbrowser-profiles", "seek");
+// A one-time hand-over of Seek's Auth0 sign-in (its localStorage entries, incl. the refresh token).
+// Seek keeps the session there, not in cookies, so copied Chrome cookies alone land on login.seek.com.
+// The file is deleted once imported: Auth0 rotates the refresh token, so only one profile may hold it.
+const AUTH_HANDOVER = process.env.SEEK_AUTH_FILE ?? join(homedir(), ".cloakbrowser-profiles", "seek-auth.json");
 const COOKIE_SITES = ["seek.com", "seek.co.nz"];
 const IDLE_CLOSE_MS = 5 * 60_000;
 
@@ -56,6 +60,7 @@ export class SeekBrowser {
       await this.refreshCookies();
     }
     this.page = this.context.pages()[0] ?? (await this.context.newPage());
+    await this.importAuthHandover(this.page);
     return this.page;
   }
 
@@ -71,6 +76,20 @@ export class SeekBrowser {
       log("could not read Chrome cookies, continuing with the profile's own:", (e as Error).message);
       return 0;
     }
+  }
+
+  private async importAuthHandover(page: Page): Promise<void> {
+    if (!existsSync(AUTH_HANDOVER)) return;
+    const { origin, localStorage: entries } = JSON.parse(readFileSync(AUTH_HANDOVER, "utf8")) as {
+      origin: string;
+      localStorage: Record<string, string>;
+    };
+    await page.goto(`${origin}/`, { waitUntil: "domcontentloaded" });
+    await page.evaluate((items) => {
+      for (const [k, v] of Object.entries(items)) localStorage.setItem(k, v);
+    }, entries);
+    rmSync(AUTH_HANDOVER, { force: true });
+    log(`imported Seek sign-in (${Object.keys(entries).length} entries) and removed the hand-over file`);
   }
 
   async close(): Promise<void> {
@@ -233,7 +252,7 @@ async function activityQuery(page: Page, path: string, op: string): Promise<any>
       if (body?.errors?.length && !body.data?.viewer) throw new NotLoggedInError(body.errors[0].message);
       return body;
     } catch (e) {
-      if (/login\.seek\.com|\/oauth\/login/.test(page.url())) {
+      if (new URL(page.url()).hostname === "login.seek.com") {
         throw new NotLoggedInError("Seek wants a login. Log into Seek in Chrome, then try again.");
       }
       // First visit may bounce through Seek's OAuth refresh to another page; go back once.
