@@ -77,23 +77,38 @@ export class SeekBrowser {
   }
 
   /**
-   * Seek keeps its sign-in in localStorage (Auth0's `@@auth0spajs@@…` entries, incl. the refresh
-   * token), not in cookies, so cookies alone always land on login.seek.com. Take the entries from
-   * the user's signed-in Chrome on every launch, so this browser is signed in exactly as Chrome is.
+   * Seek keeps its sign-in in localStorage (Auth0's `@@auth0spajs@@…` entries), not in cookies.
+   * Auth0 rotates the refresh token on every use and revokes the whole sign-in when a used one
+   * comes back, so this browser must never share Chrome's refresh token: that signed both out.
+   * If this profile has no sign-in of its own, take only Chrome's access token. Once it expires,
+   * Seek's page goes through /authorize with Chrome's Auth0 session cookie and gets its own tokens.
    */
   private async importChromeSignIn(page: Page): Promise<void> {
     try {
+      await page.goto(`${ORIGIN}/`, { waitUntil: "domcontentloaded" });
+      const ownSignIn = await page.evaluate(() =>
+        Object.keys(localStorage).some(
+          (k) => k.startsWith("@@auth0spajs@@") && !!JSON.parse(localStorage.getItem(k) ?? "{}").body?.refresh_token,
+        ),
+      );
+      if (ownSignIn) return;
       const entries = await readChromeLocalStorage(ORIGIN, "@@auth0spajs@@");
       if (!Object.keys(entries).length) {
         log("Chrome has no Seek sign-in; logged-in tools will ask for a login");
         return;
       }
-      await page.goto(`${ORIGIN}/`, { waitUntil: "domcontentloaded" });
+      for (const [k, v] of Object.entries(entries)) {
+        const entry = JSON.parse(v);
+        if (entry.body?.refresh_token) {
+          delete entry.body.refresh_token;
+          entries[k] = JSON.stringify(entry);
+        }
+      }
       await page.evaluate((items) => {
         for (const k of Object.keys(localStorage)) if (k.startsWith("@@auth0spajs@@")) localStorage.removeItem(k);
         for (const [k, v] of Object.entries(items)) localStorage.setItem(k, v);
       }, entries);
-      log(`took Seek sign-in from Chrome (${Object.keys(entries).length} entries)`);
+      log(`took Seek's access token from Chrome (${Object.keys(entries).length} entries, refresh token left with Chrome)`);
     } catch (e) {
       log("could not read Chrome's Seek sign-in:", (e as Error).message);
     }
