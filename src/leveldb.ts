@@ -1,7 +1,3 @@
-// Read-only LevelDB reader with built-in Snappy, so Chrome's Local Storage can be read without a
-// native module. It reads the tables the MANIFEST lists as live plus the current write-ahead log,
-// and keeps the newest version of each key. It takes no lock: reading the directory while Chrome
-// compacts it can fail, so readLevelDb retries, and callers can still read from a copy.
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -22,7 +18,6 @@ class Reader {
     return this.buf[this.pos++];
   }
 
-  // Up to 64-bit varint; exact while the value stays below 2^53, which file numbers and sizes do.
   varint(): number {
     let result = 0;
     for (let mul = 1; ; mul *= 128) {
@@ -43,7 +38,6 @@ class Reader {
   }
 }
 
-// CRC-32C (Castagnoli). LevelDB stores it "masked" so CRCs of data containing CRCs stay distinct.
 const CRC_TABLE = (() => {
   const t = new Uint32Array(256);
   for (let i = 0; i < 256; i++) {
@@ -65,7 +59,6 @@ function unmaskCrc(masked: number): number {
   return ((rot << 15) | (rot >>> 17)) >>> 0;
 }
 
-/** Decompress a raw (unframed) Snappy buffer. */
 export function snappyUncompress(src: Buffer): Buffer {
   const r = new Reader(src);
   const length = r.varint();
@@ -106,19 +99,15 @@ export function snappyUncompress(src: Buffer): Buffer {
         p += 4;
     }
     if (offset === 0 || offset > o || o + len > length) throw new Error("snappy: copy out of range");
-    // Copies may overlap their own output (a run), so go byte by byte.
+
     for (const end = o + len; o < end; o++) out[o] = out[o - offset];
   }
   if (o !== length) throw new Error("snappy: length mismatch");
   return out;
 }
 
-// ---- Tables (.ldb / .sst) ----
-
 const TABLE_MAGIC = 0xdb4775248b80fb57n;
 
-// Reads the block a BlockHandle (offset, size varints) at `handle` points to, checks its CRC and
-// decompresses it. Each block is followed by a 1-byte compression type and a 4-byte masked CRC.
 function readBlock(file: Buffer, handle: Reader): Buffer {
   const offset = handle.varint();
   const size = handle.varint();
@@ -132,7 +121,6 @@ function readBlock(file: Buffer, handle: Reader): Buffer {
   throw new Error(`leveldb: unsupported block compression ${type[0]}`);
 }
 
-// Entries of one block: prefix-compressed keys, then a restart array we don't need for a full scan.
 function* blockEntries(block: Buffer): Generator<Entry> {
   const restarts = block.readUInt32LE(block.length - 4);
   const r = new Reader(block.subarray(0, block.length - 4 - 4 * restarts));
@@ -146,31 +134,25 @@ function* blockEntries(block: Buffer): Generator<Entry> {
   }
 }
 
-// Every internal key/value in a table, in order. The 48-byte footer holds the metaindex and index
-// handles and ends with the magic number; the index maps each data block's last key to its handle.
 function* tableEntries(file: Buffer): Generator<Entry> {
   if (file.length < 48 || file.readBigUInt64LE(file.length - 8) !== TABLE_MAGIC) throw new Error("leveldb: not a table");
   const footer = new Reader(file.subarray(file.length - 48));
-  footer.varint(); // metaindex offset
-  footer.varint(); // metaindex size
+  footer.varint();
+  footer.varint();
   const index = readBlock(file, footer);
   for (const [, handle] of blockEntries(index)) yield* blockEntries(readBlock(file, new Reader(handle)));
 }
 
-// ---- Log files (.log, MANIFEST) ----
-
 const LOG_BLOCK = 32768;
-const LOG_HEADER = 7; // crc (4), length (2), type (1)
+const LOG_HEADER = 7;
 
-// Records of a log file, reassembled from FULL / FIRST / MIDDLE / LAST fragments. A torn or
-// corrupt fragment drops the rest of its 32 KiB block, as LevelDB's own recovery does.
 function* logRecords(file: Buffer): Generator<Buffer> {
   let parts: Buffer[] | null = null;
   let pos = 0;
   while (pos + LOG_HEADER <= file.length) {
     const left = LOG_BLOCK - (pos % LOG_BLOCK);
     if (left < LOG_HEADER) {
-      pos += left; // block trailer padding
+      pos += left;
       continue;
     }
     const length = file.readUInt16LE(pos + 4);
@@ -178,10 +160,10 @@ function* logRecords(file: Buffer): Generator<Buffer> {
     const start = pos + LOG_HEADER;
     const end = start + length;
     if (type === 0 && length === 0) {
-      pos += left; // zero-filled (preallocated) space
+      pos += left;
       continue;
     }
-    if (end > file.length) break; // write in progress
+    if (end > file.length) break;
     const data = file.subarray(start, end);
     if (length > left - LOG_HEADER || crc32c(file.subarray(pos + 6, start), data) !== unmaskCrc(file.readUInt32LE(pos))) {
       parts = null;
@@ -190,17 +172,17 @@ function* logRecords(file: Buffer): Generator<Buffer> {
     }
     pos = end;
     switch (type) {
-      case 1: // FULL
+      case 1:
         parts = null;
         yield data;
         break;
-      case 2: // FIRST
+      case 2:
         parts = [data];
         break;
-      case 3: // MIDDLE
+      case 3:
         parts?.push(data);
         break;
-      case 4: // LAST
+      case 4:
         if (parts) yield Buffer.concat([...parts, data]);
         parts = null;
         break;
@@ -210,8 +192,6 @@ function* logRecords(file: Buffer): Generator<Buffer> {
   }
 }
 
-// A write batch: 8-byte sequence, 4-byte count, then count records of tag 1 (put key, value) or
-// tag 0 (delete key). Record i gets sequence + i.
 function applyBatch(batch: Buffer, put: (key: Buffer, seq: number, value: Buffer | null) => void): void {
   if (batch.length < 12) throw new Error("leveldb: short write batch");
   const seq = Number(batch.readBigUInt64LE(0));
@@ -226,16 +206,12 @@ function applyBatch(batch: Buffer, put: (key: Buffer, seq: number, value: Buffer
   }
 }
 
-// ---- Manifest ----
-
 interface LiveFiles {
   tables: number[];
   logNumber: number;
   prevLogNumber: number;
 }
 
-// Replays the version edits in the current MANIFEST to find the live table files and the oldest
-// log that still holds unflushed writes.
 function liveFiles(dir: string): LiveFiles {
   const current = readFileSync(join(dir, "CURRENT"), "latin1").trim();
   if (!/^MANIFEST-\d+$/.test(current)) throw new Error(`leveldb: bad CURRENT file "${current}"`);
@@ -247,25 +223,25 @@ function liveFiles(dir: string): LiveFiles {
     while (!r.done) {
       const tag = r.varint();
       switch (tag) {
-        case 1: // comparator name
+        case 1:
           r.slice();
           break;
         case 2:
           logNumber = r.varint();
           break;
-        case 3: // next file number
-        case 4: // last sequence
+        case 3:
+        case 4:
           r.varint();
           break;
-        case 5: // compact pointer: level, internal key
+        case 5:
           r.varint();
           r.slice();
           break;
-        case 6: // deleted file: level, number
+        case 6:
           r.varint();
           tables.delete(r.varint());
           break;
-        case 7: // new file: level, number, size, smallest, largest
+        case 7:
           r.varint();
           tables.add(r.varint());
           r.varint();
@@ -305,7 +281,7 @@ function readOnce(dir: string, prefix: Buffer): Entry[] {
 
   for (const number of tables) {
     for (const [internalKey, value] of tableEntries(readTableFile(dir, number))) {
-      // Internal key = user key + 8-byte trailer of (sequence << 8 | type), type 1 = value, 0 = deletion.
+
       const split = internalKey.length - 8;
       const trailer = internalKey.readBigUInt64LE(split);
       put(internalKey.subarray(0, split), Number(trailer >> 8n), trailer & 0xffn ? value : null);
@@ -325,10 +301,6 @@ function readOnce(dir: string, prefix: Buffer): Entry[] {
   return out.sort((a, b) => Buffer.compare(a[0], b[0]));
 }
 
-/**
- * Live key/value pairs of the LevelDB at `dir`, sorted by key (bytewise), optionally only those
- * whose key starts with `prefix`. Retries if a compaction removes a file mid-read.
- */
 export function readLevelDb(dir: string, prefix: Buffer = Buffer.alloc(0)): Entry[] {
   for (let attempt = 1; ; attempt++) {
     try {

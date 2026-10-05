@@ -1,20 +1,27 @@
 {
   "name": "seek-mcp",
-  "version": "0.1.0",
-  "description": "Seek NZ jobs MCP server on CloakBrowser",
-  "main": "index.js",
+  "version": "0.3.0",
+  "description": "MCP server for Seek NZ (nz.seek.com): search jobs, read ads, manage your profile and résumés, and apply — over Seek's own HTTP API, no browser",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "build": "tsc"
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "test": "npm run build && node --test test/",
+    "smoke": "npm run build && node scripts/smoke.mjs"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "seek",
+    "jobs",
+    "job-search",
+    "new-zealand",
+    "claude"
+  ],
+  "author": "ezydubs",
   "license": "ISC",
   "type": "module",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.0",
-    "cloakbrowser": "^0.5.11",
-    "playwright-core": "1.58",
     "zod": "^4.6.5"
   },
   "devDependencies": {
@@ -26,5 +33,13 @@
   },
   "engines": {
     "node": ">=22.13"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ezydubs/seek-mcp.git"
+  },
+  "homepage": "https://github.com/ezydubs/seek-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/ezydubs/seek-mcp/issues"
   }
 }
