@@ -64,7 +64,8 @@ That last quote is the problem this solves. Writing the fortieth tailored cover 
 - **Node.js 22.13 or newer** (uses the built-in `fetch`, `FormData`, `Blob` and `node:test`).
 - **macOS** for the one-time Chrome sign-in hand-over (`seek_auth` with `bootstrap`). Everything else is platform-independent.
 - **Google Chrome** signed in to nz.seek.com, for that same hand-over.
-- Optional: `pdftotext` (from poppler, `brew install poppler`) for `seek_cv_read` on PDFs; `unzip` for DOCX files.
+
+No other binaries. PDF CVs are read with Mozilla's pure-JavaScript [pdf.js](https://github.com/mozilla/pdf.js) and DOCX files with Node's built-in `zlib`.
 
 ## Install
 
@@ -199,7 +200,7 @@ src/
   apply.ts           mutations: profile, roles, résumés, saved jobs, documents, submit
   answers.ts         standing answers and salary-band logic
   auth.ts            token store, renewal, authenticated GraphQL
-  cv.ts              local CV text extraction
+  cv.ts              local CV text extraction: PDF via pdf.js, DOCX via a small zip reader on node:zlib
   chrome-storage.ts  reads one origin's localStorage from a Chrome profile
   leveldb.ts         dependency-free LevelDB/Snappy reader used by chrome-storage.ts
 test/                node:test unit tests (payload shape, answer resolution, token renewal)
