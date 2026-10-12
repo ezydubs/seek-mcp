@@ -142,11 +142,15 @@ export function createServer() {
     {
       description:
         "Jobs the user has applied for on Seek, with application dates, whether a résumé/cover letter was " +
-        "included, status history and notes. seek_application has the documents sent and applicant insights.",
-      inputSchema: {},
+        "included, status history and notes, and for each application on Seek the number of candidates who applied " +
+        "(applicants) and the share who attached a résumé and a cover letter (off-site applications have none). " +
+        "applicants: false skips those figures for a quicker list. seek_application has the documents sent.",
+      inputSchema: {
+        applicants: z.boolean().optional().describe("Include each job's applicant count and résumé/cover-letter shares (default true)"),
+      },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
-    () => guard(() => appliedJobs()),
+    ({ applicants }) => guard(() => appliedJobs({ applicants })),
   );
 
   server.registerTool(

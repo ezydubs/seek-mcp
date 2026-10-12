@@ -203,7 +203,9 @@ The houston `jobDetails` document works signed out: ad HTML (`content(platform: 
 and `getJobDetailsBadges` are public. Signed in: `jobDetailsPersonalised` (saved/applied, salary match, Seek's AI
 `candidateJobMatch`), `GetMatchedQualities` (matched / inferred / unmatched skills), `createCandidateJobMatchRequest`
 (`{ jobId, channel: "chalice", platform: WEB, visitorId }`), `GetAppliedJobDetail` (applicant count and résumé /
-cover-letter percentages). `CreateReportedJob`: `{ jobId: Int, reason: Fraudulent | Discrimination | Misleading |
+cover-letter percentages: `jobDetails.insights` holds `ApplicantCount { count }`, `ApplicantsWithResumePercentage { percentage }` and
+`ApplicantsWithCoverLetterPercentage { percentage }`, each with a `message`; the exact count is only given for jobs the account applied
+to, other ads get a volume label such as "High application volume", and off-site applications get none). `CreateReportedJob`: `{ jobId: Int, reason: Fraudulent | Discrimination | Misleading |
 SalaryBelowMinimumWage, comment (≤400), email, country }`.
 
 ## Autocomplete and ids (no login, tested)

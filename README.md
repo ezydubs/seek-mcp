@@ -154,7 +154,7 @@ There is no username/password or email-code sign-in for the server: Seek's ident
 | `seek_standing_answers` | — | Read or set the standing answers (see below). |
 | `seek_saved_jobs` | yes | The saved-jobs list, with notes. |
 | `seek_save_job` / `seek_unsave_job` | yes | Save or unsave a job by id. |
-| `seek_applied_jobs` | yes | Applications with dates, documents included, status history and notes. |
+| `seek_applied_jobs` | yes | Applications with dates, documents included, status history and notes, and for each one on Seek the number of candidates who applied (`applicants`) and the share who attached a résumé and a cover letter. `applicants: false` skips those figures. |
 | `seek_application` | yes | One application: documents sent (download links) and applicant insights; `credits`, `prioritise` (strong interest), `remove` from the list. |
 | `seek_job_note` | yes | Write or clear the note on a saved or applied job. |
 | `seek_saved_searches` | yes | List, create (from search filters), delete, and switch email alerts on or off. |

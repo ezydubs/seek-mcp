@@ -1,5 +1,5 @@
 import { ORIGIN, gql, seekGet, sgql } from "./auth.js";
-import { ZONE, clean } from "./seek.js";
+import { LOCALE, ZONE, clean } from "./seek.js";
 
 const UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36";
@@ -379,7 +379,30 @@ const APPLIED_QUERY = `query GetAppliedJobs($first: Int, $locale: Locale!, $zone
   }
 }`;
 
-export async function appliedJobs() {
+export async function applicantStats(jobId: string) {
+  const d = await sgql("GetAppliedJobDetail", { jobId, locale: LOCALE }, { partialOk: true });
+  const of = (type: string) => (d?.jobDetails?.insights ?? []).find((i: any) => i?.__typename === type);
+  return clean({
+    applicants: of("ApplicantCount")?.count,
+    applicantsWithResumePercent: of("ApplicantsWithResumePercentage")?.percentage,
+    applicantsWithCoverLetterPercent: of("ApplicantsWithCoverLetterPercentage")?.percentage,
+  });
+}
+
+async function inBatches<T, R>(items: T[], size: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = [];
+  for (let i = 0; i < items.length; i += size) out.push(...(await Promise.all(items.slice(i, i + size).map(fn))));
+  return out;
+}
+
+export async function appliedJobs(opts: { applicants?: boolean } = {}) {
+  const rows: any[] = await appliedJobList();
+  if (opts.applicants === false) return rows;
+  const stats = await inBatches(rows, 6, (r) => (r.externalApply ? Promise.resolve({}) : applicantStats(r.id).catch(() => ({}))));
+  return rows.map((r: any, i: number) => ({ ...r, ...stats[i] }));
+}
+
+async function appliedJobList() {
   const data = await gql(APPLIED_QUERY, { ...ACTIVITY_VARS, sortBy: { applicationDate: "DESC" } });
   return (data.viewer?.appliedJobs?.edges ?? []).map(({ node: n }: any) => ({
     id: n.job.id,
