@@ -1,8 +1,8 @@
 # seek-mcp
 
-An [MCP](https://modelcontextprotocol.io) server for **Seek New Zealand** (nz.seek.com). It lets an MCP client such as Claude Code or Claude Desktop search jobs, read full ads, inspect what an application requires, manage the signed-in profile and résumés, save jobs, and submit applications.
+An [MCP](https://modelcontextprotocol.io) server for **Seek New Zealand** (nz.seek.com). It lets an MCP client such as Claude Code or Claude Desktop do what the website does: search jobs and read full ads, research companies (profiles, employee reviews, salaries), read Seek's career guide and salary insights, browse the recruiter directory and People search, manage every part of the signed-in profile and its résumés, keep saved jobs, saved searches and notes, tune recommendations and notifications, and submit applications.
 
-Everything runs over Seek's own HTTP API with plain Node `fetch`. There is no browser, no Puppeteer and no Playwright at runtime: the search and job-ad endpoints are called directly, and the account features use the same GraphQL operations the Seek website itself sends. The operations and input shapes were captured from the site's network traffic and apply bundle; they are documented in [NATIVE-NOTES.md](NATIVE-NOTES.md).
+Everything runs over Seek's own HTTP API with plain Node `fetch`. There is no browser, no Puppeteer and no Playwright at runtime: the server sends the same GraphQL documents the Seek website sends, copied verbatim out of the site's own JavaScript bundles (`src/documents.ts`), and checks every request it builds against the schema those bundles ship. How the operations were found is documented in [NATIVE-NOTES.md](NATIVE-NOTES.md).
 
 > **This is an unofficial tool.** It is not affiliated with or endorsed by SEEK. Automating your account may be against Seek's terms of use, applications it submits are real and cannot be withdrawn, and you are responsible for the truthfulness of every answer it sends on your behalf. Use it on your own account, at your own risk.
 
@@ -45,6 +45,7 @@ That last quote is the problem this solves. Writing the fortieth tailored cover 
 - [Tools](#tools)
 - [Applying safely](#applying-safely)
 - [Standing answers](#standing-answers)
+- [Actions that need confirmation](#actions-that-need-confirmation)
 - [Files and environment](#files-and-environment)
 - [Development](#development)
 - [How it works](#how-it-works)
@@ -52,12 +53,16 @@ That last quote is the problem this solves. Writing the fortieth tailored cover 
 
 ## Features
 
-- **Search and read without signing in** — keyword, location, work type, date range and salary filters; full ad text pulled out of the server-rendered job page.
-- **Apply natively** — the same `submitApplication` mutation the website sends, with résumé, written cover letter, written selection criteria, the profile's most recent role and every employer question answered by exact option id. Dry-run mode prepares everything and sends nothing.
-- **Answer employer questions deliberately** — human-readable answers are matched against the live questionnaire and must resolve to exactly one option; anything unmatched, ambiguous or duplicated is an error rather than a guess. Standing answers fill the standard work-rights, notice-period and salary questions.
-- **Profile management** — read the profile, update name/phone/location, add or edit career-history roles, upload/delete/set-default résumés (with Seek's virus scan awaited), read a local CV as text.
-- **Saved and applied jobs** — list them, save and unsave, and see whether a job is already applied to before applying.
-- **Self-renewing sign-in** — a one-time hand-over from your own Chrome profile, then automatic renewal; tokens live in a mode-600 file outside the repo.
+- **Search and read without signing in**: keywords, location, work type, work arrangement (on-site, hybrid, remote), classification and subclassification, listing date, salary, one advertiser or one company; counts by work type and arrangement. Full ads come with the employer's screening questions, contact details in the ad, badges, the advertiser's history on Seek and the company's rating.
+- **Companies**: profile, culture, perks and awards, employee ratings by category, Seek's AI summary of reviews, every review (filter by location, sort by recent or helpful), salary ranges by role, and the company's open jobs.
+- **Career advice and salaries**: Seek's career guide for any role (what it's like, duties, skills, how to become one, satisfaction and hours, growth, similar roles), salary insight New Zealand-wide or by region, annual or hourly, by industry, role reviews, careers by classification and the advice articles.
+- **Recruiters and people**: the recruiter and agency directory (search by placements, specialisation and region; profiles, reviews, jobs, placements, teams; contact a recruiter) and People search over public candidate profiles.
+- **Apply natively**: the same `submitApplication` mutation the website sends, with résumé, a written or uploaded cover letter, written or uploaded selection criteria, the profile's most recent role, every employer question answered by exact option id, and optional strong interest (priority apply). Dry-run mode prepares everything and sends nothing. Off-site jobs can be recorded in Applied jobs.
+- **Answer employer questions deliberately**: human-readable answers are matched against the live questionnaire and must resolve to exactly one option; anything unmatched, ambiguous or duplicated is an error rather than a guess. Standing answers fill the standard work-rights, notice-period and salary questions.
+- **The whole profile**: personal details, summary, career history (add, edit, delete, accept or dismiss résumé suggestions), education, licences and certifications, skills (with Seek's suggestions), languages, next-role preferences (availability, work types, locations, classification, role titles, salary, rights to work), approachability, visibility, photo, profile strength, activity and verifications; résumés (upload with Seek's virus scan, delete, set default, download, generate one from the profile).
+- **Your activity**: saved jobs, saved searches and their email alerts, notes on saved and applied jobs, applied jobs with the documents sent and applicant insights, priority-apply credits, recommendations and "not interested" feedback, Seek's AI job-match assessment.
+- **Settings**: email and push notification preferences, changing the sign-in email, and (guarded) deleting the account.
+- **Self-renewing sign-in**: a one-time hand-over from your own Chrome profile, then automatic renewal; tokens live in a mode-600 file outside the repo.
 
 ## Requirements
 
@@ -104,39 +109,114 @@ Restart or reconnect the client after rebuilding: a running server keeps the cod
 
 ## Signing in
 
-`seek_search`, `seek_job` and `seek_cv_read` work without an account. Every other tool needs Seek's sign-in.
+The tools marked "no" below work without an account. Every other tool needs Seek's sign-in.
 
 1. Sign in to nz.seek.com in Google Chrome (the `Default` profile unless `CHROME_PROFILE` says otherwise).
 2. Ask the client to run `seek_auth` with `bootstrap: true`. The server copies Seek's sign-in out of that Chrome profile once, renews it, and stores the result in `~/.seek-mcp/tokens.json` with mode 600.
-3. From then on the server renews the sign-in by itself. `seek_auth` with no arguments reports whether a usable sign-in is held and when it expires.
+3. From then on the server renews the sign-in by itself. `seek_auth` with no arguments reports whether a usable sign-in is held and when it expires; `check: true` asks Seek which account it is; `logout: true` revokes and deletes it.
 
-Two things to know:
+Things to know:
 
 - Seek rotates the sign-in on every renewal, so the copy Chrome held becomes stale after the hand-over and **Chrome will usually ask you to sign in again**. That is expected. Do not run the bootstrap again unless `seek_auth` reports the server signed out, or you deliberately want the server to take over whichever account Chrome is on now.
+- **An unused sign-in lapses after about a week.** Seek's identity provider stops renewing a refresh token that has not been used for roughly seven days (`invalid_grant`). `seek_auth` then reports `signedIn: false` with the reason; sign in to nz.seek.com in Chrome and bootstrap again.
 - The server acts as **whichever account Chrome was signed into at bootstrap time**. If you have more than one Seek account, check `seek_profile` (it returns the account email) before applying to anything.
 
-There is no username/password sign-in: Seek's identity provider does not allow it for this client, so a real browser login has to exist first.
+There is no username/password or email-code sign-in for the server: Seek's identity provider refuses those grants for this client, and its email-code login requires a reCAPTCHA, so a real browser login has to exist first.
 
 ## Tools
 
+58 tools. "no" in the sign-in column means it works without an account.
+
+### Jobs
+
 | Tool | Sign-in | What it does |
 |---|---|---|
-| `seek_search` | no | Search ads. Args: `keywords`, `where` (e.g. `"All Auckland"`), `page`, `pageSize` (≤100), `sort` (`relevance`/`newest`), `workType[]` (`full_time`/`part_time`/`contract`/`casual`), `listedWithinDays` (1/3/7/14/31), `salaryMin`/`salaryMax`/`salaryType`. Flags paid placements with `promoted: true`. |
-| `seek_job` | no | Full ad by id: description text, company, location, salary, work type, dates, status, and `externalApply` (true when the employer takes applications off Seek). |
-| `seek_cv_read` | no | Text of a local PDF, DOCX or text CV. Extraction only; it does not try to parse names, roles or dates. |
-| `seek_auth` | — | Status, or with `bootstrap: true` the one-time Chrome hand-over. |
-| `seek_profile` | yes | Account id and email, name, phone, location, résumés (with `isDefault`) and confirmed career-history roles. |
-| `seek_profile_update` | yes | Set first/last name, phone (`countryCallingCodeId`, NZ = `"159"`) and optionally `locationId` (Seek location id, e.g. 30010 = Auckland CBD). |
-| `seek_add_role` | yes | Add a career-history role, or pass an existing `id` to update it. |
-| `seek_resume_upload` | yes | Upload a PDF/DOC/DOCX/TXT/RTF résumé, wait for Seek's virus scan, optionally make it the default (default true). |
-| `seek_resume_delete` | yes | Delete a résumé by id. |
-| `seek_resume_set_default` | yes | Make a résumé the one applications attach by default. |
-| `seek_saved_jobs` | yes | The saved-jobs list. |
-| `seek_save_job` / `seek_unsave_job` | yes | Save or unsave a job by id. |
-| `seek_applied_jobs` | yes | Applications with dates, whether a résumé/cover letter was included, and status history. |
-| `seek_apply_requirements` | yes | What applying needs: `externalApply`, `alreadyApplied`, `saved`, `selectionCriteriaRequired`, and every employer question with its kind, text and exact options. |
-| `seek_standing_answers` | — | Read or set the standing answers (see below). |
+| `seek_search` | no | Search ads. `keywords`, `where`, `workType[]`, `workArrangement[]` (on_site/hybrid/remote), `classification[]`/`subclassification[]` ids, `listedWithinDays`, `salaryMin`/`salaryMax`/`salaryType`, `advertiserId`, `companyId` (organisation id), `page`, `pageSize` (≤100), `sort`. Returns facets and flags paid placements (`promoted`). |
+| `seek_job` | no | Full ad: description, advertiser, location, salary, work type and arrangement, classification, dates, status, bullets, badges, the employer's questions, contact details, company profile summary, `externalApply`. Signed in it adds the applicant count and salary match. |
+| `seek_similar_jobs` | no | The jobs Seek recommends alongside an ad. |
+| `seek_suggest` | no | Autocomplete and id lookup: keywords, search locations, profile locations (numeric ids), role titles, companies, schools, qualifications, skills, licences, languages (ontology ids), rights to work. |
+| `seek_classifications` | no | Classifications and subclassifications with ids, and the availability, work-type and visibility options. |
+| `seek_job_insights` | yes | Saved/applied, matched/inferred/missing skills, salary match, applicant insights, Seek's AI job-match assessment (`requestAiMatch` runs it). |
+| `seek_report_job` | either | Report an ad (Fraudulent, Discrimination, Misleading, SalaryBelowMinimumWage). Needs `confirm: true`. |
+| `seek_recommended_jobs` | yes | The recommended-jobs feed, with each job's "not interested" reasons. |
+| `seek_job_feedback` | yes | Hide jobs by those reasons, unhide, or list what is hidden. |
+
+### Applying and activity
+
+| Tool | Sign-in | What it does |
+|---|---|---|
+| `seek_apply_requirements` | yes | `externalApply`, `alreadyApplied`, `saved`, `selectionCriteriaRequired`, and every employer question with its kind, text and exact options. |
 | `seek_apply` | yes | Prepare (`submit: false`) or send (`submit: true`) an application. See [Applying safely](#applying-safely). |
+| `seek_apply_external` | yes | Record an off-site job in Applied jobs and get the employer's application address. |
+| `seek_standing_answers` | — | Read or set the standing answers (see below). |
+| `seek_saved_jobs` | yes | The saved-jobs list, with notes. |
+| `seek_save_job` / `seek_unsave_job` | yes | Save or unsave a job by id. |
+| `seek_applied_jobs` | yes | Applications with dates, documents included, status history and notes. |
+| `seek_application` | yes | One application: documents sent (download links) and applicant insights; `credits`, `prioritise` (strong interest), `remove` from the list. |
+| `seek_job_note` | yes | Write or clear the note on a saved or applied job. |
+| `seek_saved_searches` | yes | List, create (from search filters), delete, and switch email alerts on or off. |
+
+### Profile
+
+| Tool | Sign-in | What it does |
+|---|---|---|
+| `seek_profile` | yes | Account id and email, name, phone, location, résumés and roles; `sections` adds any of summary, roles, suggestedRoles, education, suggestedEducation, licences, skills, suggestedSkills, languages, availability, workTypes, preferredLocations, preferredClassification, preferredRoleTitles, salary, rightsToWork, approachable, visibility, avatar, strength, activity, verifications, references, publicProfile (or `all`). |
+| `seek_profile_update` | yes | First/last name, phone (`countryCallingCodeId`, NZ = `"159"`) and optionally `locationId` (omit to keep the current one). |
+| `seek_profile_summary` | yes | The personal summary. |
+| `seek_add_role` | yes | Add a career-history role, or pass an existing `id` to update it. |
+| `seek_role_manage` | yes | Delete a role, or accept / dismiss a role suggested from a résumé. |
+| `seek_education` | yes | Add, update, delete, accept or dismiss qualifications. |
+| `seek_licence` | yes | Add, update or delete licences and certifications. |
+| `seek_skills` | yes | List (with suggestions), set, add or remove skills. |
+| `seek_language` | yes | Add or delete languages. |
+| `seek_preferences` | yes | Read or set availability, work types, preferred locations, classification, role titles, minimum salary, rights to work, approachability and visibility. |
+| `seek_avatar` | yes | Upload (JPG/PNG) or delete the profile photo. |
+| `seek_resume_upload` | yes | Upload a PDF/DOC/DOCX/TXT/RTF résumé, wait for Seek's virus scan, optionally make it the default (default true). |
+| `seek_resume_delete` / `seek_resume_set_default` | yes | Delete a résumé, or make one the default. |
+| `seek_resume_download` | yes | A download link for a résumé. |
+| `seek_resume_generate` | yes | Have Seek build a résumé from the profile. |
+| `seek_cv_read` | no | Text of a local PDF, DOCX or text CV. Extraction only. |
+
+### Account
+
+| Tool | Sign-in | What it does |
+|---|---|---|
+| `seek_auth` | — | Status; `check`, `bootstrap` (one-time Chrome hand-over), `logout`. |
+| `seek_notifications` | yes | List or change email/push notifications per type and channel, with frequency. |
+| `seek_change_email` | yes | Change the sign-in email: send a code, then verify it. |
+| `seek_delete_account` | yes | Permanently delete the account; needs the account's exact email as `confirmEmail`. |
+
+### Companies
+
+| Tool | Sign-in | What it does |
+|---|---|---|
+| `seek_company_search` | no | Company profiles by name, with ids, ratings and review counts. |
+| `seek_company` | no | Profile, ratings by category, AI review summary, `organisationId`. |
+| `seek_company_reviews` | no | Reviews, by page, sorted by recent or helpful, optionally for one location. |
+| `seek_company_salaries` | no | Salary ranges by role against the industry. |
+| `seek_company_jobs` | no | The company's open jobs. |
+| `seek_company_review_feedback` | yes | Mark a review helpful or report it. Needs `confirm: true`. |
+
+### Career advice
+
+| Tool | Sign-in | What it does |
+|---|---|---|
+| `seek_career_search` | no | Roles and advice articles; `suggest` for quick role completions. |
+| `seek_career_role` | no | The career guide for a role. |
+| `seek_career_salary` | no | Salary insight for a role, nationwide or by region, annual or hourly, by industry. |
+| `seek_career_reviews` | no | What people in the role say about it. |
+| `seek_career_explore` | no | Classifications, or a classification's roles. |
+| `seek_career_article` | no | Read an article, or list the latest. |
+
+### Recruiters and people
+
+| Tool | Sign-in | What it does |
+|---|---|---|
+| `seek_recruiter_search` | no | Recruiters or agencies by name, placements, specialisations, role types and region; `filters` lists the values. |
+| `seek_recruiter` | no | A recruiter's or agency's profile, reviews, jobs, placements or team. |
+| `seek_contact_recruiter` | either | Message a recruiter through the directory. Needs `confirm: true`. |
+| `seek_people_search` | no | Public candidate profiles by name, narrowed by role titles, companies and locations. |
+| `seek_person` | no | One public profile. |
 
 ### `seek_apply` arguments
 
@@ -145,9 +225,10 @@ There is no username/password sign-in: Seek's identity provider does not allow i
 | `id` | Seek job id (numeric string). |
 | `submit` | **Required.** `false` prepares and sends nothing; `true` submits the application for real. |
 | `answers[]` | One entry per employer question: `{ question, option }` for choice questions (`option` is the option's text, or an array for multiple-choice), `{ question, text }` for free-text questions. `question` is any fragment of the question text; it must match exactly one question, and `option` exactly one option. |
-| `coverLetterText` | Full cover letter, sent as a written cover letter. Omit for none. |
-| `selectionCriteriaText` | Written selection criteria; required when `seek_apply_requirements` reports `selectionCriteriaRequired`. |
+| `coverLetterText` / `coverLetterPath` | A written cover letter, or a file to attach. Omit both for none. |
+| `selectionCriteriaText` / `selectionCriteriaPath` | Written or attached selection criteria; one is required when `seek_apply_requirements` reports `selectionCriteriaRequired`. |
 | `resumeId` | Defaults to the profile's default résumé; `null` sends no résumé. |
+| `strongInterest` | Spend a priority-apply credit to flag strong interest (`seek_application` action `credits` shows what is left). |
 | `profilePrivacyLevel` | `Public` (default) or `Private`. |
 
 Both modes return the résumé used, whether documents were prepared, the most recent role Seek will attach, the standing answers that were auto-filled and the resolved option for every question. `submit: true` additionally returns Seek's `applicationId`.
@@ -180,11 +261,21 @@ Seek asks the same three screening questions on most jobs. `seek_standing_answer
 
 Call it with no arguments to read the current settings. Answers are stored in `~/.seek-mcp/answers.json`. An explicit answer in `seek_apply` always wins over a standing one, and a question is never answered twice.
 
+## Actions that need confirmation
+
+Some tools reach other people or cannot be undone. They say so in their descriptions and MCP annotations, and refuse to act without an explicit argument:
+
+- `seek_report_job`, `seek_contact_recruiter` and `seek_company_review_feedback` need `confirm: true`.
+- `seek_delete_account` needs `confirmEmail` equal to the signed-in account's email (Seek itself asks for nothing).
+- `seek_apply` sends only with `submit: true`; `seek_change_email` changes nothing until the emailed code is given.
+
+A Seek mutation that answers with a typed failure (`…Failure`, `error`, `errors`) is reported as an error, never as done.
+
 ## Files and environment
 
 | Path / variable | Purpose |
 |---|---|
-| `~/.seek-mcp/tokens.json` | The sign-in (mode 600). Delete it to sign the server out. |
+| `~/.seek-mcp/tokens.json` | The sign-in (mode 600). Delete it, or run `seek_auth` with `logout: true`, to sign the server out. |
 | `~/.seek-mcp/answers.json` | Standing answers. |
 | `SEEK_TOKEN_DIR` | Directory for the two files above (default `~/.seek-mcp`). |
 | `CHROME_PROFILE` | Chrome profile directory name to bootstrap from (default `Default`). |
@@ -195,31 +286,42 @@ Nothing about your account is written inside the repository.
 
 ```
 src/
-  server.ts          MCP tool definitions and the apply orchestration
-  api.ts             search, job ad, application requirements, profile, saved/applied jobs
-  apply.ts           mutations: profile, roles, résumés, saved jobs, documents, submit
-  answers.ts         standing answers and salary-band logic
-  auth.ts            token store, renewal, authenticated GraphQL
-  cv.ts              local CV text extraction: PDF via pdf.js, DOCX via a small zip reader on node:zlib
-  chrome-storage.ts  reads one origin's localStorage from a Chrome profile
-  leveldb.ts         dependency-free LevelDB/Snappy reader used by chrome-storage.ts
-test/                node:test unit tests (payload shape, answer resolution, token renewal)
-scripts/             live checks against a real account (see below)
-NATIVE-NOTES.md      the Seek API as observed: endpoints, GraphQL operations, payload shapes
+  server.ts            createServer(), the core tools (search, job, apply, profile, résumés, saved/applied, auth) and INSTRUCTIONS
+  tools/*.ts           the other tools, one module per area: jobs, activity, profile, settings, companies, career, directory
+  documents.ts         generated: the GraphQL documents nz.seek.com sends, copied verbatim from its bundles
+  seek.ts              constants, signed-out GraphQL (nz.seek.com and the career-guide API), clean(), shared helpers
+  auth.ts              token store, renewal, signed-in GraphQL, typed-failure checks, status/check/logout
+  api.ts               search, job page fallback, application requirements, profile, saved/applied jobs
+  apply.ts             application documents and submit, résumé and attachment uploads, roles, personal details, saved jobs
+  jobs.ts              job details over GraphQL, similar jobs, insights, AI job match, reports
+  activity.ts          saved searches, notes, applications, priority apply, recommendations and job preferences
+  profile-sections.ts  every other profile section, preferences, avatar, résumé download and generation
+  settings.ts          notifications, email change, account deletion
+  companies.ts         company search, profile, reviews, salaries, jobs, review feedback
+  career.ts            career guide, salaries, role reviews, articles
+  directory.ts         People search and the recruiter directory
+  discover.ts          autocomplete / id lookups, classifications, profile option lists
+  answers.ts, cv.ts, chrome-storage.ts, leveldb.ts   standing answers, CV text, Chrome hand-over
+test/                  node:test unit tests; scenarios.mjs drives every signed-in operation; fixtures/ holds Seek's schema
+scripts/               live checks (below) and research/ (how documents.ts and the schema were produced)
+NATIVE-NOTES.md        the Seek API as observed: endpoints, operations, payload shapes, how they were found
 ```
 
-- `npm test` builds and runs the unit tests. They need no network and no account.
-- `npm run smoke` drives the built server over MCP stdio against the signed-in account: search, job, requirements, profile, saved/applied lists, save→unsave, and a **dry-run** apply. Set `SEEK_CV_PATH` to a résumé file to also exercise `seek_cv_read` and upload→delete. It sends no applications.
+- `npm test` builds and runs the unit tests. They need no network and no account. `requests-schema.test.mjs` drives every signed-in operation through the real code with canned replies and validates each request's document and variables against Seek's own GraphQL schema.
+- `npm run check:public` calls every tool that needs no sign-in against the live site.
+- `npm run check:shapes` sends every signed-in request to Seek **without** a sign-in and checks Seek answers `UNAUTHENTICATED` (the request is well formed and nothing ran) rather than `BAD_USER_INPUT`. Operations that might run anonymously, and the application submit, are never sent.
+- `npm run smoke` drives the built server against the signed-in account: search, job, requirements, profile and all its sections, preferences, notifications, saved/applied lists, insights, recommendations, and round trips that leave the account as they found it (save → note → clear → unsave, saved search create → alerts off → delete, and a **dry-run** apply). Set `SEEK_CV_PATH` to a résumé file to also exercise `seek_cv_read` and upload → delete. It sends no applications.
 - `node scripts/matrix.mjs "<keywords>"` and `node scripts/scan.mjs` dry-run many jobs to see which the standing answers can complete and which questions block the rest.
 - `node scripts/submit.mjs <jobId> <hourlyRate> [yes]` **submits a real application** after a dry run; `yes` passes the privacy-policy consent.
 
-To extend the server with another Seek operation, capture it from the website (introspection is disabled) and add it following the pattern in `apply.ts`; record what you learn in `NATIVE-NOTES.md`.
+To add another Seek operation: rebuild the research catalogue (`scripts/research/`, see NATIVE-NOTES.md), add its name to `scripts/research/gen-documents.mjs`, run `npm run research:documents`, call it with `sgql` (signed in) or `publicGql`, and add a scenario to `test/scenarios.mjs`.
 
 ## How it works
 
-- Search is a GET to Seek's public `jobsearch/v5/search` endpoint; a job ad is the `window.SEEK_APOLLO_DATA` object embedded in the job page, extracted with a string-aware brace scanner.
-- Account features POST Apollo-style batches to `nz.seek.com/graphql` with a bearer token and Seek's brand/country headers. On `UNAUTHENTICATED` the server renews once and retries.
-- Applying mirrors the website step for step: `TrackJobApplicationStarted`, `GetJobApplicationProcess` for the questionnaire, `generateCoverLetter` / `generateSelectionCriteria` for written documents, then one `submitApplication` whose input is built exactly as the site's bundle builds it (optional parts omitted, not nulled). Résumé upload uses the same presigned S3 form the site requests.
+- Job search is a GET to Seek's public `jobsearch/v5/search` endpoint. Everything else is GraphQL: `nz.seek.com/graphql` for jobs, companies, the recruiter directory, People search and the account, and `career-guide-api.cloud.seek.com.au/graphql` (with `country: NZ` headers) for the career guide, salaries and articles.
+- The documents are the website's own, copied verbatim from its JavaScript bundles: `scripts/research/` downloads each app's bundles, reads the compiled GraphQL ASTs and query strings out of them as data (never running them), and `gen-documents.mjs` writes the ones the server uses into `src/documents.ts`.
+- Account calls send a bearer token and Seek's brand/country headers. On `UNAUTHENTICATED` the server renews once and retries. Mutations that answer with a typed failure are reported as errors.
+- Applying mirrors the website step for step: `TrackJobApplicationStarted`, `GetJobApplicationProcess` for the questionnaire, `generateCoverLetter` / `generateSelectionCriteria` for written documents (or the presigned upload plus `processUploadedAttachment` for files), then one `submitApplication` whose input is built exactly as the site's bundle builds it (optional parts omitted, not nulled).
 - Sign-in renewal is the standard refresh grant against Seek's identity provider; the refresh token rotates on every use, which is why only one party may hold it.
 
 Details, field names and the captured operation list are in [NATIVE-NOTES.md](NATIVE-NOTES.md).

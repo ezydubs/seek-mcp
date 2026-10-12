@@ -63,14 +63,38 @@ if (first) {
   await tool("seek_unsave_job", { id: first.id });
 }
 
+const CV = process.env.SEEK_CV_PATH;
 if (CV) {
   const up = await tool("seek_resume_upload", { path: CV, makeDefault: false });
   if (up?.resume?.id) await tool("seek_resume_delete", { id: up.resume.id });
-}
+  await tool("seek_cv_read", { path: CV });
+} else console.log("\n(set SEEK_CV_PATH to exercise seek_cv_read and résumé upload → delete)");
 
-const CV = process.env.SEEK_CV_PATH;
-if (CV) await tool("seek_cv_read", { path: CV });
-else console.log("\n(set SEEK_CV_PATH to exercise seek_cv_read)");
+await tool("seek_auth", { check: true });
+await tool("seek_profile", { sections: ["all"] });
+await tool("seek_preferences");
+await tool("seek_skills");
+await tool("seek_notifications");
+await tool("seek_saved_searches");
+await tool("seek_recommended_jobs");
+await tool("seek_job_feedback");
+await tool("seek_application", { action: "credits" });
+if (first) {
+  await tool("seek_job_insights", { id: first.id });
+  await tool("seek_save_job", { id: first.id });
+  await tool("seek_job_note", { id: first.id, list: "saved", note: "seek-mcp smoke test note" });
+  const withNote = await tool("seek_saved_jobs");
+  console.log("note stored:", Array.isArray(withNote) && withNote.some((j) => j.id === first.id && j.notes));
+  await tool("seek_job_note", { id: first.id, list: "saved", note: null });
+  await tool("seek_unsave_job", { id: first.id });
+}
+const created = await tool("seek_saved_searches", { action: "create", keywords: "seek-mcp smoke test", where: "All Auckland" });
+if (created?.search?.id) {
+  await tool("seek_saved_searches", { action: "alerts", id: created.search.id, emailAlerts: false });
+  await tool("seek_saved_searches", { action: "delete", id: created.search.id });
+}
+const applied = await tool("seek_applied_jobs");
+if (Array.isArray(applied) && applied[0]) await tool("seek_application", { id: applied[0].id });
 
 const withQs = await tool("seek_search", { keywords: "office administrator", where: "All Auckland", pageSize: 8, sort: "newest" });
 for (const cand of (withQs?.jobs ?? []).filter((j) => !j.promoted)) {

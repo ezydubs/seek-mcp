@@ -1,12 +1,15 @@
 {
   "name": "seek-mcp",
-  "version": "0.3.0",
-  "description": "MCP server for Seek NZ (nz.seek.com): search jobs, read ads, manage your profile and résumés, and apply — over Seek's own HTTP API, no browser",
+  "version": "0.4.0",
+  "description": "MCP server for Seek NZ (nz.seek.com): job search, full ads, companies and reviews, career advice and salaries, recruiters, people search, your whole profile, résumés, saved jobs and searches, notifications and applying — over Seek's own HTTP API, no browser",
   "scripts": {
     "build": "tsc",
     "start": "node dist/server.js",
-    "test": "npm run build && node --test test/",
-    "smoke": "npm run build && node scripts/smoke.mjs"
+    "test": "npm run build && node --test test/*.test.mjs",
+    "smoke": "npm run build && node scripts/smoke.mjs",
+    "check:public": "npm run build && node scripts/check-public.mjs",
+    "check:shapes": "npm run build && node scripts/check-shapes.mjs",
+    "research:documents": "node scripts/research/gen-documents.mjs"
   },
   "keywords": [
     "mcp",
@@ -15,7 +18,10 @@
     "jobs",
     "job-search",
     "new-zealand",
-    "claude"
+    "claude",
+    "company-reviews",
+    "salaries",
+    "recruiters"
   ],
   "author": "ezydubs",
   "license": "ISC",
@@ -27,6 +33,7 @@
   },
   "devDependencies": {
     "@types/node": "^24.19.1",
+    "graphql": "^16.9.0",
     "typescript": "^5.9.3"
   },
   "bin": {

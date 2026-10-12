@@ -1,9 +1,11 @@
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { readChromeLocalStorage } from "./chrome-storage.js";
+import { D, type DocumentName } from "./documents.js";
+import { ORIGIN, opName } from "./seek.js";
 
-export const ORIGIN = "https://nz.seek.com";
+export { ORIGIN };
 const ISSUER = "https://login.seek.com/";
 const STORE_DIR = process.env.SEEK_TOKEN_DIR ?? join(homedir(), ".seek-mcp");
 const TOKEN_PATH = join(STORE_DIR, "tokens.json");
@@ -20,6 +22,7 @@ export interface StoredToken {
   refresh_token: string;
   expires_at: number;
   scope: string | null;
+  renewError?: { at: string; message: string } | null;
 }
 
 function readStore(): StoredToken | null {
@@ -106,20 +109,32 @@ async function currentToken(force: boolean): Promise<StoredToken> {
       refresh_token: next.refresh_token ?? cur.refresh_token,
       expires_at: Date.now() + (next.expires_in ?? 3600) * 1000,
       scope: next.scope ?? cur.scope,
+      renewError: null,
     };
     writeStore(t);
     return t;
   } catch (e) {
+    const message = (e as Error).message;
+    try {
+      writeStore({ ...cur, renewError: { at: new Date().toISOString(), message } });
+    } catch {
+    }
     throw new NotLoggedInError(
-      `Could not renew the Seek sign-in: ${(e as Error).message}. Log into Seek again and re-run seek_auth.`,
+      `Could not renew the Seek sign-in: ${message}. Log into Seek again and re-run seek_auth.`,
     );
   }
 }
 
 export function authStatus() {
   const t = readStore();
+  const dead = !!t?.renewError && (t.expires_at ?? 0) <= Date.now();
   return {
-    signedIn: !!t,
+    signedIn: !!t && !dead,
+    renewable: t ? !t.renewError : null,
+    renewError: t?.renewError ?? null,
+    note: dead
+      ? "Seek refused to renew this sign-in (it lapses after about a week unused). Sign in to nz.seek.com in Chrome, then run seek_auth with bootstrap: true."
+      : undefined,
     account: t?.audience ?? null,
     clientId: t?.client_id ?? null,
     expiresAt: t?.expires_at ? new Date(t.expires_at).toISOString() : null,
@@ -145,12 +160,22 @@ const unauthenticated = (body: any): boolean =>
   Array.isArray(body?.errors) &&
   body.errors.some((e: any) => e?.extensions?.code === "UNAUTHENTICATED");
 
-export async function gql<T = any>(query: string, variables: Record<string, unknown> = {}): Promise<T> {
+export const isSignedIn = () => {
+  const t = readStore();
+  return !!t && !(t.renewError && t.expires_at <= Date.now());
+};
+
+export async function gql<T = any>(
+  query: string,
+  variables: Record<string, unknown> = {},
+  opts: { partialOk?: boolean } = {},
+): Promise<T> {
+  const operationName = opName(query);
   const send = async (token: string) => {
     const r = await fetch(`${ORIGIN}/graphql`, {
       method: "POST",
       headers: graphqlHeaders(token),
-      body: JSON.stringify([{ query, variables }]),
+      body: JSON.stringify([{ ...(operationName ? { operationName } : {}), query, variables }]),
     });
     const text = await r.text();
     let body: any;
@@ -169,8 +194,58 @@ export async function gql<T = any>(query: string, variables: Record<string, unkn
     body = await send(token);
   }
   if (unauthenticated(body)) throw new NotLoggedInError("Seek rejected the sign-in. Run seek_auth again.");
-  if (body?.errors?.length) throw new Error(`Seek: ${body.errors[0].message}`);
+  if (body?.errors?.length && !(opts.partialOk && body.data != null)) {
+    const e = body.errors[0];
+    throw new Error(`Seek${operationName ? ` (${operationName})` : ""}: ${e.message}${e.extensions?.code ? ` [${e.extensions.code}]` : ""}`);
+  }
   return body.data as T;
+}
+
+export function assertMutationSucceeded(operation: string, data: any): void {
+  for (const [field, v] of Object.entries(data ?? {})) {
+    const r = v as any;
+    if (!r || typeof r !== "object") continue;
+    const message =
+      (typeof r.__typename === "string" && r.__typename.endsWith("Failure") ? r.error?.message ?? r.errors?.[0]?.message ?? "rejected" : null) ??
+      (r.error?.message ? r.error.message : null) ??
+      (Array.isArray(r.errors) && r.errors.length ? r.errors[0]?.message ?? r.errors[0]?.code ?? "rejected" : null);
+    if (message) throw new Error(`Seek refused ${operation} (${field}): ${String(message).replace(/^"|"$/g, "")}`);
+  }
+}
+
+export async function sgql<T = any>(name: DocumentName, variables: Record<string, unknown> = {}, opts: { partialOk?: boolean } = {}): Promise<T> {
+  const data = await gql<T>(D[name], variables, opts);
+  if (/^\s*mutation\b/.test(D[name])) assertMutationSucceeded(name, data);
+  return data;
+}
+
+export async function checkSignIn() {
+  const data = await gql(`query GetUserDetails { viewer { _id emailAddress } }`);
+  return { working: true, accountId: data?.viewer?._id ?? null, email: data?.viewer?.emailAddress ?? null };
+}
+
+export async function logout() {
+  const t = readStore();
+  if (!t) return { signedOut: true, detail: "There was no sign-in to remove." };
+  let revoked = false;
+  try {
+    const r = await fetch(`${ISSUER}oauth/revoke`, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: ORIGIN },
+      body: JSON.stringify({ client_id: t.client_id, token: t.refresh_token }),
+    });
+    revoked = r.ok;
+  } catch {
+    revoked = false;
+  }
+  if (existsSync(TOKEN_PATH)) rmSync(TOKEN_PATH);
+  return {
+    signedOut: true,
+    revoked,
+    detail: revoked
+      ? "Seek revoked the server's sign-in and the local copy was deleted."
+      : "The local copy was deleted; Seek did not confirm the revocation (it may already have lapsed).",
+  };
 }
 
 export async function seekGet(url: string, init: RequestInit = {}): Promise<Response> {

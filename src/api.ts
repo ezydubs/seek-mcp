@@ -14,18 +14,18 @@ export interface SearchParams {
   salaryMin?: number;
   salaryMax?: number;
   salaryType?: "annual" | "hourly";
+  classification?: number[];
+  subclassification?: number[];
+  workArrangement?: Array<"on_site" | "hybrid" | "remote">;
+  advertiserId?: string;
+  companyId?: string;
 }
 
 const WORK_TYPE_IDS = { full_time: 242, part_time: 243, contract: 244, casual: 245 } as const;
+const WORK_ARRANGEMENT_IDS = { on_site: 1, hybrid: 2, remote: 3 } as const;
 
-export async function search(p: SearchParams) {
-  const q: Record<string, string> = {
-    siteKey: "NZ-Main",
-    locale: "en-NZ",
-    page: String(p.page ?? 1),
-    pageSize: String(Math.min(p.pageSize ?? 20, 100)),
-    sortmode: p.sort === "newest" ? "ListedDate" : "KeywordRelevance",
-  };
+export function searchFilters(p: SearchParams): Record<string, string> {
+  const q: Record<string, string> = {};
   if (p.keywords) q.keywords = p.keywords;
   if (p.where) q.where = p.where;
   if (p.workType?.length) q.worktype = p.workType.map((w) => WORK_TYPE_IDS[w]).join(",");
@@ -34,6 +34,24 @@ export async function search(p: SearchParams) {
     q.salaryrange = `${p.salaryMin ?? 0}-${p.salaryMax ?? ""}`;
     q.salarytype = p.salaryType ?? "annual";
   }
+  if (p.classification?.length) q.classification = p.classification.join(",");
+  if (p.subclassification?.length) q.subclassification = p.subclassification.join(",");
+  if (p.workArrangement?.length) q.workarrangement = p.workArrangement.map((w) => WORK_ARRANGEMENT_IDS[w]).join(",");
+  if (p.advertiserId) q.advertiserid = p.advertiserId;
+  if (p.companyId) q.companyid = p.companyId;
+  return q;
+}
+
+export async function search(p: SearchParams) {
+  const q: Record<string, string> = {
+    siteKey: "NZ-Main",
+    locale: "en-NZ",
+    page: String(p.page ?? 1),
+    pageSize: String(Math.min(p.pageSize ?? 20, 100)),
+    sortmode: p.sort === "newest" ? "ListedDate" : "KeywordRelevance",
+    ...searchFilters(p),
+    facets: "workType,workArrangement",
+  };
   const url = new URL("/api/jobsearch/v5/search", ORIGIN);
   for (const [k, v] of Object.entries(q)) url.searchParams.set(k, v);
   const r = await fetch(url, { headers: { accept: "application/json", "user-agent": UA } });
@@ -43,21 +61,35 @@ export async function search(p: SearchParams) {
     id: string; title: string; companyName?: string; advertiser?: { description?: string };
     locations?: { label: string }[]; salaryLabel?: string; workTypes?: string[];
     workArrangements?: { displayText?: string }; listingDate?: string; listingDateDisplay?: string;
-    teaser?: string; bulletPoints?: string[]; classifications?: { subclassification?: { description?: string } }[];
+    teaser?: string; bulletPoints?: string[];
+    classifications?: { classification?: { id?: string; description?: string }; subclassification?: { id?: string; description?: string } }[];
     isFeatured?: boolean; displayType?: string;
   };
+  const facets = data.facets && typeof data.facets === "object"
+    ? Object.fromEntries(
+        Object.entries(data.facets as Record<string, Array<{ id: string; count: number; label?: { text?: string } }>>).map(
+          ([k, list]) => [k, (list ?? []).map((f) => ({ id: f.id, label: f.label?.text ?? null, count: f.count }))],
+        ),
+      )
+    : undefined;
   return {
     total: data.totalCount as number,
     page: Number(q.page),
-    jobs: ((data.data ?? []) as Raw[]).map((j) => ({
+    where: data.location ? { understoodAs: data.location.description ?? null, whereId: data.location.whereId ?? null } : undefined,
+    facets,
+    jobs: ((data.data ?? []) as Raw[]).map((j: any) => ({
       id: j.id,
       title: j.title,
       company: j.companyName ?? j.advertiser?.description ?? null,
-      location: j.locations?.map((l) => l.label).join("; ") || null,
+      advertiserId: j.advertiser?.id ?? null,
+      location: j.locations?.map((l: { label: string }) => l.label).join("; ") || null,
       salary: j.salaryLabel || null,
       workType: j.workTypes?.join(", ") || null,
-      arrangement: j.workArrangements?.displayText || null,
+      arrangement: j.workArrangements?.displayText || j.workArrangements?.data?.map((a: any) => a.label?.text).filter(Boolean).join(", ") || null,
       category: j.classifications?.[0]?.subclassification?.description ?? null,
+      classificationId: j.classifications?.[0]?.classification?.id ?? null,
+      subclassificationId: j.classifications?.[0]?.subclassification?.id ?? null,
+      tags: j.tags?.length ? j.tags.map((t: any) => t.label ?? t.type) : undefined,
       listed: j.listingDate ?? null,
       listedAgo: j.listingDateDisplay ?? null,
       promoted: j.isFeatured || j.displayType === "promoted" || undefined,
@@ -346,6 +378,7 @@ export async function appliedJobs() {
     withResume: n.hasAppliedWithResume ?? null,
     withCoverLetter: n.hasAppliedWithCoverLetter ?? null,
     preferredApplication: n.isPreferredApplication ?? null,
+    applicationRequestId: n.applicationRequestId ?? null,
     status: n.events?.length ? n.events[n.events.length - 1].status : null,
     history: (n.events ?? []).map((e: any) => ({ status: e.status, at: e.timestamp?.dateTimeUtc ?? null })),
     notes: n.notes ?? null,

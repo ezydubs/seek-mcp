@@ -125,12 +125,13 @@ Tested: real applications land this way and show in `GetAppliedJobs`.
   `CreateSavedJobSuccess { id }` | `CreateSavedJobFailure { errors { message } }`
 - `DeleteSavedJob({ input: { id }, locale })` → `deleteSavedJob2` → `DeleteSavedJobSuccess { id }` | failure
 
-## Other mutations seen in the bundle (not used here)
+## Other operations
 
-`UpdateSkills`, `UpdateQualification`, `DeleteQualification`, `ApplyAddLicence`/`ApplyUpdateLicence`/`ApplyDeleteLicence`,
-`CreateProfileAvatar` (returns an `uploadUrl` for a PUT), `ApplyProcessUploadedAttachment` (uploaded cover
-letters/selection criteria → `uri`), `ConfirmRole`/`RejectRole`/`RejectUnconfirmedData` (résumé-parsed suggestions),
-`createApplyLinkout` (off-site jobs: `createLinkoutApplication { applicationUrl }`).
+Since 0.4.0 the server uses the site's documents for every candidate feature; see "Finding operations" below.
+Seen in the bundles and deliberately not used: tracking (`trackSelected`, `SubmitSourcrPageAnalyticsEvent`…),
+feature flags, employer-side branding (`createBrand`, `updateBrand`), CMS page builds (unified-apac), the anonymous
+saved-search and newsletter sign-ups, unsubscribe-by-token links, `PostProfileReport` and the company review form
+(`postCompanyReviewExperiment2`, a multi-step experiment flow).
 
 ## Token renewal: tested, works
 
@@ -152,3 +153,174 @@ Checked on 2026-10-05 whether a browser-free sign-in exists: the Auth0 client
 `device_code` grants (`unauthorized_client`), and `/authorize` only accepts the site's own callback
 URL. So a first token has to come from a real sign-in in a browser; there is no username/password
 API to call.
+
+## Finding operations (2026-10-12)
+
+Introspection is disabled on the live endpoint, but every Seek web app ships its documents. Each section of the site
+is its own webpack app under `/static/<app>/` (job search, job ads and the home feed: `ca-search-ui/houston`;
+profile: `profile`; saved searches: `disc-static-pages`; saved and applied jobs: `my-jobs`; settings: `settings`;
+privacy: `unified-apac`; apply: `jobapply`; companies: `company-candidate-ui`; People search: `candidate-basic-search`;
+recruiters: `recruiter-directory-ssr`; career advice: `/career-advice/assets/`; sign-in pages: login.seek.com
+`hosted-pages-deploy`). Each app's `runtime-*.js` maps its lazy chunks.
+
+`scripts/research/`: `fetch-app.mjs` downloads an app and all its chunks; `extract-gql.mjs` reads the compiled
+`{kind:"Document",definitions:[…]}` literals as data with a small literal parser (nothing is executed) and prints them
+with graphql-js; `catalog.mjs` adds string-form (`gql` template) documents, resolves fragments by name and writes one
+catalogue (351 operations); `gen-documents.mjs` copies the documents the server uses into `src/documents.ts`;
+`extract-schema.mjs` pulls the introspection result the company and recruiter apps embed
+(`JSON.parse('{"__schema":…}')`, about 1,360 types) into `test/fixtures/seek-schema.json.gz`.
+
+The embedded schema is a little older than the live one (e.g. `content2`, `salaryMatch`, `preferredRoleTitleList`,
+`lastCoverLetterMethod` are newer), so the live server stays the authority. Two ways to check a request without
+a sign-in:
+
+- **Offline**: validate the document and coerce the variables against the schema (`test/requests-schema.test.mjs`).
+- **Live**: send it with no authorization header. Seek validates documents and variables before running resolvers, so a
+  well-formed request gets `UNAUTHENTICATED` and does nothing, and a malformed one gets `BAD_USER_INPUT` /
+  `GRAPHQL_VALIDATION_FAILED` naming the field (`Field "x" of required type "T!" was not provided`, `Field "y" is not
+  defined by type "T"`). Sending empty inputs this way lists a type's required fields. Never do this with operations
+  that may run anonymously (reports, recruiter messages, review feedback, newsletter sign-ups). `scripts/check-shapes.mjs`.
+
+Several mutations report failure as a typed result rather than an error (for example an unauthenticated
+`updatePreferredLocations2` returns `UpdatePreferredLocations2Failure { error { message } }` with HTTP 200), so every
+mutation result is checked for `…Failure`, `error` and `errors`.
+
+## Search: more filters (tested)
+
+`jobsearch/v5/search` also takes `classification` and `subclassification` (comma lists of ids from
+`getClassificationOptions`), `workarrangement` (1 on-site, 2 hybrid, 3 remote), `advertiserid`, `companyid` (a company's
+**organisation id**, e.g. Kiwibank 2945, from the company profile; the company page id does not work) and
+`facets=workType,workArrangement` (counts by id). The response's `location.whereId` is the id Seek resolved `where` to
+(1018 All Auckland); company review and salary lookups take that same id. Results carry `workArrangements.data[]`,
+`tags[]` (e.g. `URGENT` "Immediate start") and classification ids.
+
+## Job ad over GraphQL (no login, tested)
+
+The houston `jobDetails` document works signed out: ad HTML (`content(platform: WEB)`), phone number and
+`contactMatches`, advertiser id/verification/registration date, work arrangements, badges, `products.questionnaire`
+(the employer's questions as text), bullets, video, share link, and `companyProfile` (id, slug, rating, size, perks).
+`insights` (applicant count) needs a sign-in and `isAuthenticated: true`. `JobDetailsRecommendedJobs` (similar jobs)
+and `getJobDetailsBadges` are public. Signed in: `jobDetailsPersonalised` (saved/applied, salary match, Seek's AI
+`candidateJobMatch`), `GetMatchedQualities` (matched / inferred / unmatched skills), `createCandidateJobMatchRequest`
+(`{ jobId, channel: "chalice", platform: WEB, visitorId }`), `GetAppliedJobDetail` (applicant count and résumé /
+cover-letter percentages). `CreateReportedJob`: `{ jobId: Int, reason: Fraudulent | Discrimination | Misleading |
+SalaryBelowMinimumWage, comment (≤400), email, country }`.
+
+## Autocomplete and ids (no login, tested)
+
+`getKeywordSuggestions`, `searchLocationsSuggest`, `getProfileLocationSuggest` (`locationType: Home`; numeric ids such as
+Ponsonby 30182, used by `UpdatePersonalDetails` and `UpdatePreferredLocations2`), and the ontology lookups
+`getRoleTitle`, `getOrganisations`, `getEducationProviders`, `getQualifications`, `getSpecReqs` (`profileField: Skills |
+LicencesCertifications | LanguageProficiency`), `getRightToWorkOptions`. Profile values go back as
+`OntologyStructuredDataInput { text, ontologyId }`, with `ontologyId: null` for free text. Option lists:
+`GetAvailabilityOptions` (0, 2, 4, 8, 12 weeks), `GetWorkTypeOptions` (1–4), `GetProfileVisibilityOptions` (Public,
+Standard, Limited, Hidden), `getClassificationOptions`.
+
+## Profile sections (signed in; shapes checked live)
+
+Reads: `GetCareerObjectives`, `GetConfirmedRoles` / `GetUnconfirmedRoles`, `GetConfirmedQualifications` /
+`GetUnconfirmedQualifications`, `GetLicences`, `GetSkills` / `GetSuggestedSkills`, `GetLanguageProficiencies`,
+`GetAvailability`, `GetWorkTypes`, `GetPreferredLocations2`, `GetPreferredClassification`, `GetPreferredRoleTitleList`,
+`GetSalaryPreferences`, `GetRightsToWork`, `GetApproachability`, `GetProfileVisibility2`, `GetProfileAvatar`,
+`GetScore`, `GetProfileInsights`, `getVerifications`, `getReferenceChecks`, `GetPublicProfile`.
+
+Writes (input → notes):
+
+| Mutation | Input |
+|---|---|
+| `UpdateCareerObjectives` | `careerObjectivesData { personalStatement }` |
+| `DeleteRole` / `ConfirmRole` / `RejectRole` | `{ id }`; confirm re-sends the suggestion as `UpdateRoleInput` plus `contextId` = the résumé it was parsed from |
+| `UpdateQualification` / `ConfirmQualification` | `{ id, name, institute, completed, completionYear? , expectedCompletionDate?, highlights? }` |
+| `RejectQualification` | `{ id, dataType: Education }` |
+| `UpdateLicence` / `DeleteLicence` | `{ id, name, issuingOrganisation?, issueDate?, expiryDate?, noExpiryDate, description? }` / `{ id }` |
+| `UpdateSkills` | `skillsData { skills: [{ keyword: { text, ontologyId } }] }` (the whole list) |
+| `UpdateLanguageProficiency` / `DeleteLanguageProficiency` | `{ id, name }` / `{ id }` |
+| `UpdateAvailability` | `availability { id: Int }` |
+| `UpdatePreferredWorkTypes` | `workTypesData { ids: [Int] }` |
+| `UpdatePreferredLocations2` | `{ preferredLocations: [{ id: Int }] }` |
+| `UpdatePreferredClassification` | `{ classification: { id, subClassification: { id } } }` |
+| `UpdatePreferredRoleTitleList` | `{ add: [{ title, ontology? }], remove: [{ title }] }` |
+| `UpdateSalaryPreferences` | `{ salaryPreferences: [{ id: UUID, countryCode, amount, salaryType: Annual \| Monthly \| Hourly }] }` |
+| `UpdateRightsToWork` | `{ rightsToWork: [{ id: UUID, countryCode, type2: { id: <option id> } }] }` |
+| `UpdateApproachability` | `approachability { approachable }` |
+| `UpdateProfileVisibility2` | `{ id: Public \| Standard \| Limited \| Hidden }` |
+| `CreateProfileAvatar` → PUT `uploadUrl` → `GetProfileAvatarStatus` | photo upload; `DeleteProfileAvatar` |
+| `GenerateResumeFromProfile` | `{ zone, languageCode }` |
+| `DocumentDownloadLink` | `resourceId` and `resumeId` both the résumé id |
+
+`UpdatePersonalDetails` always sets the location as well (`updateCurrentLocation2`), so to keep it the current
+`currentLocation2.id` has to be re-sent. Versions before 0.4.0 sent 30010 (Auckland CBD) whenever no location was given.
+
+## Activity (signed in; shapes checked live)
+
+- Saved searches: `GetSavedSearches` (`viewer.apacSavedSearches`), `CreateApacSavedSearch({ searchQueryString, zone })`
+  where the query string uses the search URL's parameter names (`keywords=…&where=…&worktype=242`),
+  `DeleteApacSavedSearch({ id })`, `UpdateSavedSearchEmailAlert(id, allowEmailAlert)`.
+- Notes: `SetSavedJobNotes` / `SetAppliedJobNotes({ id, notes })`, `RemoveSavedJobNotes` / `RemoveAppliedJobNotes(jobId)`.
+- `DeleteAppliedJob({ id })` removes an application from the list; it does not withdraw it.
+- `GetResumeLink` / `GetCoverLetterLink(jobId)`: download links for the documents an application sent.
+- Priority apply: `GetPriorityApplyCredit` (`credit2` is `PrioritizedCredit` for identity-verified candidates, else
+  `PendingCredit`); `MarkAsPreferredApplication({ applicationRequestId, state })` with state `Prioritized` or `Pending`
+  to match; `submitApplication` takes the same as `priorityApply.state`.
+- Recommendations: `GetRecommendedJobs` (career feed, `components: ["JOB"]`); each job's `feedbackReasons` carry
+  `saveJobPreferencesArgs { reason, typeId }` for `SaveJobPreference([…])`; `CandidateJobPreferences` lists them and
+  `DeleteJobPreferences([{ id }])` undoes one.
+- Off-site jobs: `createApplyLinkout(jobId)` → `createLinkoutApplication { applicationUrl }`, recorded in Applied jobs.
+- Uploaded cover letters / selection criteria: `GetDocumentUploadData` + presigned S3 POST (as résumés), then
+  `processUploadedAttachment({ id, attachmentType: CoverLetter | SelectionCriteria })` → `uri`, sent as `coverLetter { uri }`.
+
+## Settings (signed in; shapes checked live)
+
+- Notifications: `GetCTPPreference` lists groups → products (`NotificationCtpPreferenceProductType`, e.g. `SavedSearch`,
+  `NewJob`, `AppViewed`, `MarketingNewsletter`) → channel subscriptions; `updateNotificationCtpPreferences({
+  onlyProductionOption: true, zone, preferences: [{ id, notificationsChannel: [{ channel: email|push, frequency?,
+  subscribe, reason: preferenceUI }] }] })`.
+- Email: `changeEmailStart({ newEmailAddress })` emails a code; `changeEmailVerify({ newEmailAddress, verificationCode,
+  brand: seek, country: NZ, language: en })` completes it.
+- `deleteAccount({ accountDelete: {} })`: no confirmation input at all, so the tool demands the account email.
+
+## Companies (no login, tested)
+
+`SearchCompanies(name)` → `companyId` (the number at the end of the profile slug) and `organisationId`.
+`GetCompanyDetailAndReviewSummary`: overview, culture, perks, awards, `companyReviewRating` by category and star, and
+`companyReviewsAISummary`. `CompanyReviews` takes the id twice (`companyProfileId`, `newCompanyProfileId`); `sort` is
+`""` for most recent or `"-upvote_count"` for most helpful (other values return nothing); `locationId` is the search
+`whereId`. `CompanyReviewLocations`, `GetCompanySalaryRange`. A company's jobs are the search with `companyid=<organisationId>`.
+Signed in: `PostCompanyProfileReviewUpvotes({ companyId, reviewId })`, `PostCompanyProfileReviewFlag({ companyId,
+reviewId, reason: spam | disagree | personal_info | offensive | sensitive | response_inappropriate | bias | others, details })`.
+
+## Career advice (no login, tested)
+
+A separate endpoint, `https://career-guide-api.cloud.seek.com.au/graphql`, localised by headers `country: NZ`,
+`language: en`, `seek-request-country: NZ`, `x-seek-site: skl-career-guide-site` (without them the content is
+Australian). Roles go by alias (`accountant`): `GetRole` (`specReqInput: { size }`), `GetRoleTasksAndDuties`,
+`GetRoleWhatsItLike`, `GetHowToBecome`, `GetRoleSpecReqs`, `GetRoleReviewStats`, `GetWorkHours`, `GetRoleGrowth`,
+`GetSimilarRoles`, `GetRoleReviews(roleId: alias)`. Salaries: `GetSalarySuggestionByRoleAndLocation(role_id, roleTitle,
+locationId, salaryType?)` with locationId 3001 for New Zealand or a search `whereId` for a region (1018 Auckland),
+`salaryType: HOURLY` for rates; `GetRoleClassSalariesById` by industry. Search: `AutoSuggestV2({ term, filter: { type:
+ROLE } })`, `SearchV2` / `SearchV2Articles`. Articles: `GetArticleV2(alias)`, `GetLatestArticles`. Explore:
+`Classifications` → `GetRolesByClassificationUrl(segment)`.
+
+## Recruiter directory (no login, tested)
+
+On `nz.seek.com/graphql` under `sourcr`. `SearchRecruiter` / `SearchAgency({ input: { query, pagination: { cursor, pageSize },
+filters, withBoost: true, visitorId } })`: the cursor is 1-based (0 gives INTERNAL_SERVER_ERROR), and the site always
+sends `LAST_REVIEW_DATE: [last12Months]` and `COUNTRY: ["New Zealand"]`; `POSTCODE` takes a region's postcode ranges from
+`GetFiltersData`, plus `SPECIALISATIONS`, `ROLE_TYPES`, `PLACEMENT_TITLES`. Profiles: `SeekDirectoryRecruiterProfileDetails` /
+`SeekDirectoryAgencyProfileDetails`, `GetRecruiterReview` / `GetAgencyReview`, `PaginatedJobs`, `PaginatedPlacements`,
+`GetTeamData`. `ContactRecruiterByEmail({ message, slug, type, name, email, number?, country: NZ, jobId? })`.
+
+## People search (no login, tested)
+
+`PublicProfileSearch({ input: { searchQuery, market: NZ, pageNumber, pageSize, locations: { values }, roleTitles: { values,
+matchLatestOnly }, companies: { values, matchLatestOnly }, visitorId } })`, `locations` required; it matches names.
+`PublicProfileView({ input: { slug } })`; signed out some profiles come back as `RestrictedPublicProfileView`.
+
+## Sign-in findings (2026-10-12)
+
+- A refresh token unused for about a week stops renewing: `invalid_grant` "Unknown or invalid refresh token".
+- The sign-in page's "Email me a sign in code" is Auth0 passwordless (`/passwordless/start` with `send: link`), and Seek's
+  tenant answers `recaptcha_required` without a reCAPTCHA token, so it cannot be driven without a browser.
+- The authorize request the site makes: `response_type=code`, `response_mode=query`, PKCE S256,
+  `redirect_uri=https://nz.seek.com/oauth/callback/` (trailing slash), scope `openid profile email offline_access`,
+  audience `https://seek/api/candidate`.

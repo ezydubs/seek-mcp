@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { basename, extname } from "node:path";
-import { ORIGIN, gql } from "./auth.js";
+import { ORIGIN, assertMutationSucceeded, gql } from "./auth.js";
 import { answerAsFigure, pickSalaryBand, type StandingAnswers } from "./answers.js";
 
 const ZONE = "anz-2";
@@ -25,17 +25,23 @@ export interface PersonalDetails {
   locationId?: number;
 }
 
+const CURRENT_LOCATION = `query CurrentLocation($zone: Zone!) { viewer { _id currentLocation2(languageCode: "en", zone: $zone) { id } } }`;
+
 export async function updatePersonalDetails(d: PersonalDetails) {
-  return gql(UPDATE_PERSONAL, {
+  const locationId = d.locationId ?? Number((await gql(CURRENT_LOCATION, { zone: ZONE }))?.viewer?.currentLocation2?.id);
+  if (!locationId) throw new Error("The profile has no location yet: pass locationId (find one with seek_suggest kind profile_locations)");
+  const data = await gql(UPDATE_PERSONAL, {
     personalDetailsInput: {
       firstName: d.firstName,
       lastName: d.lastName,
       phoneNumber: d.phoneNumber.replace(/^[+\s()-]+/, ""),
       countryCallingCode: { id: d.countryCallingCodeId ?? "159" },
     },
-    currentLocationInput: { currentLocation: { id: d.locationId ?? 30010 } },
+    currentLocationInput: { currentLocation: { id: locationId } },
     zone: ZONE,
   });
+  assertMutationSucceeded("UpdatePersonalDetails", data);
+  return data;
 }
 
 const UPDATE_ROLE = `mutation UpdateRole($role: UpdateRoleInput!) {
@@ -57,7 +63,7 @@ export interface RoleInput {
 }
 
 export async function upsertRole(role: RoleInput) {
-  return gql(UPDATE_ROLE, {
+  const data = await gql(UPDATE_ROLE, {
     role: {
       id: role.id ?? randomUUID(),
       title: { text: role.title, ontologyId: null },
@@ -68,6 +74,8 @@ export async function upsertRole(role: RoleInput) {
       seniority: null,
     },
   });
+  assertMutationSucceeded("UpdateRole", data);
+  return data;
 }
 
 const RESUME_FRAGMENT = `fragment resume on Resume {
@@ -133,22 +141,38 @@ const summariseResume = (r: any): ResumeSummary => ({
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-export async function uploadResume(path: string, opts: { makeDefault?: boolean } = {}) {
+async function uploadDocument(path: string, what: string): Promise<string> {
   const ext = extname(path).toLowerCase();
   const type = RESUME_TYPES[ext];
   if (!type) {
-    throw new Error(`Seek accepts PDF, DOC, DOCX, TXT or RTF résumés; "${basename(path)}" has ${ext ? `the extension ${ext}` : "no extension"}`);
+    throw new Error(`Seek accepts PDF, DOC, DOCX, TXT or RTF files for a ${what}; "${basename(path)}" has ${ext ? `the extension ${ext}` : "no extension"}`);
   }
   const bytes = await readFile(path);
   const id = randomUUID();
-
   const form = (await gql(UPLOAD_FORM, { id })).viewer?.documentUploadFormData;
-  if (!form?.link || !Array.isArray(form.formFields)) throw new Error("Seek did not return an upload form for the résumé");
+  if (!form?.link || !Array.isArray(form.formFields)) throw new Error(`Seek did not return an upload form for the ${what}`);
   const body = new FormData();
   for (const f of form.formFields as Array<{ key: string; value: string }>) body.append(f.key, f.value);
   body.append("file", new Blob([bytes], { type }), basename(path));
   const upload = await fetch(form.link, { method: "POST", body });
-  if (!upload.ok) throw new Error(`Uploading the résumé failed with HTTP ${upload.status}: ${(await upload.text()).slice(0, 300)}`);
+  if (!upload.ok) throw new Error(`Uploading the ${what} failed with HTTP ${upload.status}: ${(await upload.text()).slice(0, 300)}`);
+  return id;
+}
+
+const PROCESS_ATTACHMENT = `mutation ApplyProcessUploadedAttachment($input: ProcessUploadedAttachmentInput!) {
+  processUploadedAttachment(input: $input) { uri }
+}`;
+
+export async function uploadAttachment(path: string, attachmentType: "CoverLetter" | "SelectionCriteria"): Promise<string> {
+  const what = attachmentType === "CoverLetter" ? "cover letter" : "selection criteria";
+  const id = await uploadDocument(path, what);
+  const uri = (await gql(PROCESS_ATTACHMENT, { input: { id, attachmentType } }))?.processUploadedAttachment?.uri;
+  if (!uri) throw new Error(`Seek stored the ${what} but returned no uri for it`);
+  return uri;
+}
+
+export async function uploadResume(path: string, opts: { makeDefault?: boolean } = {}) {
+  const id = await uploadDocument(path, "résumé");
 
   const processed = await gql(PROCESS_RESUME, { input: { id, parsingContext: { id: randomUUID() }, zone: ZONE } });
   const registered = processed.processUploadedResume?.resume;
@@ -391,8 +415,11 @@ export interface SubmitInput {
 
   resumeId?: string | null;
   coverLetterText?: string | null;
+  coverLetterPath?: string | null;
 
   selectionCriteriaText?: string | null;
+  selectionCriteriaPath?: string | null;
+  priorityApply?: "Prioritized" | "Pending" | null;
 
   questionnaireAnswers?: Answer[];
 
@@ -418,6 +445,7 @@ export function buildSubmitPayload(p: {
   questionnaireAnswers?: Answer[];
   mostRecentRole?: MostRecentRole | null;
   profilePrivacyLevel?: "Public" | "Private";
+  priorityApply?: "Prioritized" | "Pending" | null;
 }): Record<string, unknown> {
   const payload: Record<string, unknown> = {
     jobId: p.jobId,
@@ -426,16 +454,16 @@ export function buildSubmitPayload(p: {
     profilePrivacyLevel: p.profilePrivacyLevel ?? "Public",
   };
   if (p.resume) payload.resume = { id: p.resume.id, uri: p.resume.uri, idFromResumeResource: -1 };
-  if (p.coverLetterText && p.coverLetterUri) payload.coverLetter = { writtenText: p.coverLetterText, uri: p.coverLetterUri };
-  if (p.selectionCriteriaText && p.selectionCriteriaUri) {
-    payload.selectionCriteria = { writtenText: p.selectionCriteriaText, uri: p.selectionCriteriaUri };
+  if (p.coverLetterUri) payload.coverLetter = { ...(p.coverLetterText ? { writtenText: p.coverLetterText } : {}), uri: p.coverLetterUri };
+  if (p.selectionCriteriaUri) {
+    payload.selectionCriteria = { ...(p.selectionCriteriaText ? { writtenText: p.selectionCriteriaText } : {}), uri: p.selectionCriteriaUri };
   }
   if (p.mostRecentRole) {
     const r = p.mostRecentRole;
     payload.mostRecentRole = { company: r.company, title: r.title, started: r.started, ...(r.finished ? { finished: r.finished } : {}) };
   }
   if (p.questionnaireAnswers?.length) payload.questionnaireAnswers = p.questionnaireAnswers;
-  payload.priorityApply = { state: "NotPrioritized" };
+  payload.priorityApply = { state: p.priorityApply ?? "NotPrioritized" };
   return payload;
 }
 
@@ -458,12 +486,18 @@ export async function prepareApplication(input: SubmitInput): Promise<ApplyPrefl
   });
 
   const resume = input.resumeId ? { id: input.resumeId, uri: `/v2/blobstore/resumes/${input.resumeId}/` } : null;
+  if (input.coverLetterText && input.coverLetterPath) throw new Error("Give the cover letter as text or as a file, not both");
+  if (input.selectionCriteriaText && input.selectionCriteriaPath) throw new Error("Give the selection criteria as text or as a file, not both");
   const coverLetterUri = input.coverLetterText
     ? await generateDocument(GENERATE_COVER_LETTER, "generateCoverLetter", input.coverLetterText, "cover letter")
-    : null;
+    : input.coverLetterPath
+      ? await uploadAttachment(input.coverLetterPath, "CoverLetter")
+      : null;
   const selectionCriteriaUri = input.selectionCriteriaText
     ? await generateDocument(GENERATE_SELECTION_CRITERIA, "generateSelectionCriteria", input.selectionCriteriaText, "selection criteria")
-    : null;
+    : input.selectionCriteriaPath
+      ? await uploadAttachment(input.selectionCriteriaPath, "SelectionCriteria")
+      : null;
 
   return { correlationId, resume, coverLetterUri, selectionCriteriaUri };
 }
@@ -481,6 +515,7 @@ export async function submitApplication(input: SubmitInput, preflight?: ApplyPre
     questionnaireAnswers: input.questionnaireAnswers,
     mostRecentRole: input.mostRecentRole,
     profilePrivacyLevel: input.profilePrivacyLevel,
+    priorityApply: input.priorityApply,
   });
 
   const data = await gql(SUBMIT, { locale: LOCALE, input: payload });
@@ -488,4 +523,15 @@ export async function submitApplication(input: SubmitInput, preflight?: ApplyPre
   if (result?.errors?.length) throw new Error(`Seek rejected the application: ${result.errors[0].message}`);
   if (!result?.applicationId) throw new Error("Seek accepted the request but returned no application id");
   return { applicationId: result.applicationId, url: `${ORIGIN}/job/${input.jobId}` };
+}
+
+const CREATE_LINKOUT = `mutation createApplyLinkout($jobId: ID!) {
+  createLinkoutApplication(input: { jobId: $jobId }) { applicationUrl }
+}`;
+
+export async function startExternalApplication(jobId: string) {
+  assertJobId(jobId);
+  const url = (await gql(CREATE_LINKOUT, { jobId }))?.createLinkoutApplication?.applicationUrl;
+  if (!url) throw new Error(`Seek returned no employer application address for job ${jobId}`);
+  return { jobId, recordedOnSeek: true, applicationUrl: url };
 }
