@@ -71,8 +71,18 @@ export function unwrap(body: GqlBody, what: string, partialOk = false): any {
   return body.data;
 }
 
+const UNSTABLE_FIELD_OPERATIONS = new Set([
+  "jobDetailsPersonalised", "CandidateJobMatch", "createCandidateJobMatchRequest", "CandidateJobMatchStrongFit",
+  "createCandidateJobMatchStrongFitRequest", "CandidateJobMatchStandOut", "createCandidateJobMatchStandOutRequest",
+  "GetCareerFeed", "CareerFeedJobsNextBestQuestion", "SubmitCareerFeedJobsRefinement", "GetCareerFeedRecsRefinementStatus",
+  "CareerFeedProfilePerformanceInsightsSummary", "GetJobSearchAssist", "GetGraduatesTabData",
+]);
+
+export const featureHeaders = (operationName?: string): Record<string, string> =>
+  operationName && UNSTABLE_FIELD_OPERATIONS.has(operationName) ? { "x-custom-features": "application/features.seek.all+json" } : {};
+
 export async function publicGql(name: DocumentName, variables: Record<string, unknown> = {}, opts: { partialOk?: boolean; headers?: Record<string, string> } = {}) {
-  const { body } = await postGraphql(`${ORIGIN}/graphql`, D[name], variables, { ...SITE_HEADERS, ...opts.headers });
+  const { body } = await postGraphql(`${ORIGIN}/graphql`, D[name], variables, { ...SITE_HEADERS, ...featureHeaders(name), ...opts.headers });
   return unwrap(body, name, opts.partialOk);
 }
 

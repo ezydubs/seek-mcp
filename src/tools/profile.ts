@@ -50,7 +50,9 @@ export function register(server: McpServer) {
         "Add, edit or delete a qualification in the profile's Education section, or accept / dismiss one Seek suggested " +
         "from a résumé. For add/update, use seek_suggest (schools, qualifications) to get the ontology ids Seek prefers; " +
         "free text works too. A completed qualification takes completionYear; one in progress takes expectedCompletion. " +
-        "update changes only the fields given.",
+        "update changes only the fields given. A verified qualification (verified: true in seek_profile sections " +
+        "[\"education\"], checked by a third party) takes only highlights on update, and delete refuses it with the " +
+        "verifier's removal link.",
       inputSchema: {
         action: z.enum(["add", "update", "delete", "confirm", "reject"]),
         id: z.string().optional().describe("Qualification id, for update/delete/confirm/reject"),
@@ -89,7 +91,9 @@ export function register(server: McpServer) {
     {
       description:
         "Add, edit or delete a licence or certification on the profile. seek_suggest kind licences gives the ontology id. " +
-        "Omit expiryDate for one that does not expire. update changes only the fields given.",
+        "Omit expiryDate for one that does not expire. update changes only the fields given. A verified licence " +
+        "(verified: true in seek_profile sections [\"licences\"], checked by a third party) takes only description on " +
+        "update, and delete refuses it with the verifier's removal link.",
       inputSchema: {
         action: z.enum(["add", "update", "delete"]),
         id: z.string().optional().describe("Licence id, for update/delete"),

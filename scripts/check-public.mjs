@@ -56,6 +56,8 @@ if (jobId) {
 for (const [kind, query] of [["keywords", "accoun"], ["search_locations", "ponson"], ["profile_locations", "ponsonby"], ["role_titles", "softw"], ["companies", "kiwib"], ["schools", "univ of auck"], ["qualifications", "bachelor of com"], ["skills", "pyth"], ["licences", "forklift"], ["languages", "maor"], ["rights_to_work", "new zealand"]]) {
   await tool("seek_suggest", { kind, query, count: 3 }, (d) => JSON.stringify(d).slice(0, 220));
 }
+await tool("seek_suggest", { kind: "search_refinements", query: "accountant", where: "All Wellington", count: 4 },
+  (d) => `${d.jobs} jobs in ${d.where}; assist: ${(d.searchAssist ?? []).map((p) => `${p.label} → "${p.keywords}"`).join(" | ") || "none"}; related: ${(d.related ?? []).map((p) => p.label).join(" | ") || "none"}`);
 await tool("seek_classifications", {}, (d) => `${d.classifications.length} classifications; availability=${d.profileOptions.availability.map((a) => a.description).join("/")}; visibility=${d.profileOptions.visibility.map((v) => v.id).join("/")}`);
 
 const cs = await tool("seek_company_search", { name: "ryman healthcare", limit: 3 }, (d) => d.map((c) => `${c.name} ${c.id} (${c.reviews ?? 0} reviews)`).join(" | "));
@@ -65,6 +67,11 @@ await tool("seek_company_reviews", { company: companyId, perPage: 2, sort: "rece
 await tool("seek_company_reviews", { company: companyId, perPage: 2, location: "All Auckland" }, (d) => `Auckland: ${d.paging?.total ?? d.reviews?.length} reviews; first at ${d.reviews?.[0]?.location}`);
 await tool("seek_company_salaries", { company: "kiwibank" }, (d) => `${d.roles?.length ?? 0} roles; updated ${d.updated}`);
 await tool("seek_company_jobs", { company: "kiwibank", pageSize: 3 }, (d) => `${d.total} jobs at ${d.company}: ${d.jobs.map((j) => j.title).join(" | ")}`);
+await tool("seek_company_search", { industries: true }, (d) => `${d.length} industries: ${d.slice(0, 3).map((i) => `${i.name} (${i.id})`).join(", ")}…`);
+await tool("seek_company_search", { industry: "Banking & Credit", limit: 5 }, (d) => `${d.industry.name} (${d.industry.id}): ${d.companies.map((c) => c.name).join(" | ")}`);
+await tool("seek_company_search", { industry: "legal" }, (d) => `${d.industry.name} (${d.industry.id}): ${d.companies.length} companies, first ${d.companies[0]?.name}`);
+await tool("seek_company", { company: "177568768485850", section: "graduates" }, (d) => `${d.company}: ${d.programs?.length ?? 0} programmes (${(d.programs ?? []).map((p) => p.title).join(", ")}); ${d.applicationSteps?.length ?? 0} steps; ${d.stories?.length ?? 0} stories; ${d.videos?.length ?? 0} videos; ${d.totalJobs ?? 0} graduate jobs`);
+await tool("seek_company", { company: companyId, section: "graduates" }, (d) => `${d.company}: graduates=${d.graduates ?? true}`);
 
 await tool("seek_career_search", { term: "nurse", size: 3 }, (d) => `${d.total} results: ${d.results.map((r) => `${r.title} (${r.type})`).join(" | ")}`);
 await tool("seek_career_search", { term: "cover letter", type: "articles", size: 3 }, (d) => `${d.total} articles: ${d.articles.map((a) => a.title).join(" | ")}`);
@@ -78,6 +85,40 @@ await tool("seek_career_explore", { classification: "Accounting" }, (d) => `${d.
 await tool("seek_career_article", {}, (d) => `${d.length} latest: ${d.slice(0, 2).map((a) => a.title).join(" | ")}`);
 await tool("seek_career_article", { alias: "how-to-choose-a-career" }, (d) => `${d.title}: ${d.text?.length} chars`);
 
+const refused = async (name, args, pattern) => {
+  const t = Date.now();
+  const r = await call("tools/call", { name, arguments: args });
+  const text = r.content?.[0]?.text ?? "";
+  const ok = !!r.isError && pattern.test(text);
+  results.push({ name, ok, ms: Date.now() - t });
+  console.log(`${ok ? "✓" : "✗"} ${name} ${JSON.stringify(args)} — ${Date.now() - t}ms\n    ${ok ? "refused signed out, as expected" : "expected a sign-in refusal"}: ${text.slice(0, 200)}`);
+};
+await tool("seek_career_role", { role: "accountant", region: "All Auckland" }, (d) => `${d.title}: ${d.liveJobs?.total} live jobs in ${d.liveJobs?.where}; ${d.skills?.filter((s) => s.id).length} skills with ids`);
+await tool("seek_career_role", { role: "accountant", section: "pathways" }, (d) => `${d.pathways?.length} pathways (jobs in ${d.liveJobsIn}): ${d.pathways?.map((p) => `${p.alias} from $${p.salaryFrom}, ${p.liveJobs} jobs`).join("; ")}`);
+await tool("seek_career_role", { role: "accountant", section: "pathways", differentField: true, minSalaryLiftPercent: 20, region: "All Wellington", size: 4 }, (d) => `other fields, +20%: ${d.pathways?.map((p) => `${p.alias} ${p.liveJobs} jobs in ${d.liveJobsIn}`).join("; ")}`);
+await tool("seek_career_role", { role: "accountant", section: "jobs", region: "All Auckland", size: 3 }, (d) => `${d.total} ${d.role} jobs in ${d.where}: ${d.jobs?.map((j) => `${j.title} @ ${j.company} (${j.id})`).join(" | ")}`);
+await refused("seek_career_role", { role: "accountant", section: "reason" }, /seek_auth/);
+await tool("seek_career_explore", { skills: ["Xero", "Financial Reporting"], size: 5 }, (d) => `${d.skills?.map((s) => `${s.skill} ${s.id?.slice(0, 8)}`).join(" + ")}: ${d.roles?.map((r) => `${r.alias} [${r.matchedSkills?.length}]`).join(", ")}`);
+await tool("seek_career_explore", { counts: true }, (d) => `${d.roles} roles; ${d.byIndustry?.length} industries, top ${d.byIndustry?.[0]?.industry} (${d.byIndustry?.[0]?.roles}); ${d.byTheme?.length} themes, top ${d.byTheme?.[0]?.theme} (${d.byTheme?.[0]?.roles})`);
+await tool("seek_career_explore", { counts: true, theme: "working with numbers", minSalary: 100000 }, (d) => `${d.roles} roles for ${JSON.stringify(d.filter)}: ${d.byIndustry?.slice(0, 3).map((i) => `${i.industry} ${i.roles}`).join(", ")}`);
+await tool("seek_career_article", { list: "featured", size: 3 }, (d) => `${d.length} featured: ${d.map((a) => a.title).join(" | ")}`);
+await tool("seek_career_article", { list: "popular" }, (d) => `${d.length} popular: ${d.map((a) => a.title).join(" | ")}`);
+await tool("seek_career_article", { category: "job-hunting", size: 3 }, (d) => `${d.articles?.length} featured in ${d.category}: ${d.articles?.map((a) => a.title).join(" | ")}`);
+await tool("seek_career_article", { category: "cover-letters", size: 3 }, (d) => `${d.category} (in ${d.within}): ${d.articles?.map((a) => a.title).join(" | ")}`);
+const quizLine = (d) => `step ${d.step} of 0-${d.totalSteps - 1}, ${d.kind}: ${d.question ?? d.text}${d.choices ? ` [${d.choices.length} choices]` : ""}`;
+const quizAnswers = [];
+let quiz = await tool("seek_career_quiz", {}, quizLine);
+while (quiz && quizAnswers.length < quiz.totalSteps - 1) {
+  quizAnswers.push(
+    quiz.kind === "multichoice" ? { choices: quiz.choices.slice(0, 2) }
+      : quiz.kind === "freeText" ? { text: "I enjoy analysing figures and solving problems, and would like regular hours with some remote work." }
+      : quiz.kind === "profile" ? { role: "Accounts Payable Officer" } : {},
+  );
+  if (quizAnswers.length === quiz.totalSteps - 1) break;
+  quiz = await tool("seek_career_quiz", { answers: quizAnswers }, quizLine);
+}
+await refused("seek_career_quiz", { answers: quizAnswers }, /needs a sign-in/);
+
 const ppl = await tool("seek_people_search", { query: "accountant", locations: ["Auckland"], pageSize: 3 }, (d) => `exact=${d.exactMatches?.length ?? 0} partial=${d.partialMatches?.length ?? 0}`);
 const slug = ppl?.exactMatches?.[0]?.slug ?? ppl?.partialMatches?.[0]?.slug;
 if (slug) await tool("seek_person", { slug }, (d) => `${d.restricted ? "restricted" : "full"} profile; roles=${d.roles?.length ?? 0}; skills=${d.skills?.length ?? 0}`);
@@ -90,6 +131,11 @@ if (rslug) {
   await tool("seek_recruiter", { slug: rslug }, (d) => `${d.name} @ ${d.agency?.name}: rating ${d.rating} (${d.reviews}); placements=${d.recentPlacements?.length ?? 0} jobs=${d.openJobs?.length ?? 0}`);
   await tool("seek_recruiter", { slug: rslug, section: "reviews", pageSize: 2 }, (d) => `${d.total} reviews; first: ${d.items?.[0]?.title}`);
 }
+const fr = await tool("seek_recruiter_search", { featured: true }, (d) => `${d.total} featured recruiters: ${d.results.slice(0, 3).map((r) => `${r.name} (${r.agency}, ${r.rating})`).join(" | ")}`);
+const fa = await tool("seek_recruiter_search", { featured: true, type: "agency" }, (d) => `${d.total} featured agencies: ${d.results.slice(0, 3).map((r) => `${r.name} (${r.reviews} reviews)`).join(" | ")}`);
+const awardsLine = (d) => `${d.total} awards: ${d.awards.map((a) => `${a.name} ${a.years} [${a.source}]`).join(" | ")}`;
+if (fa?.results?.[0]?.slug) await tool("seek_recruiter", { slug: fa.results[0].slug, type: "agency", section: "awards" }, awardsLine);
+if (fr?.results?.[0]?.slug) await tool("seek_recruiter", { slug: fr.results[0].slug, section: "awards", pageSize: 5 }, awardsLine);
 
 const bad = results.filter((r) => !r.ok);
 console.log(`\n${results.length - bad.length}/${results.length} public calls succeeded${bad.length ? `; failed: ${bad.map((b) => b.name).join(", ")}` : ""}`);

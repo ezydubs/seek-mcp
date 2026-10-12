@@ -24,16 +24,21 @@ import { register as registerSettings } from "./tools/settings.js";
 import { register as registerCompanies } from "./tools/companies.js";
 import { register as registerCareer } from "./tools/career.js";
 import { register as registerDirectory } from "./tools/directory.js";
+import { register as registerFeed } from "./tools/feed.js";
 
-export const VERSION = "0.4.0";
+export const VERSION = "0.5.0";
 
 export const INSTRUCTIONS = [
   "Seek New Zealand (nz.seek.com) over Seek's own HTTP API.",
   "No sign-in: seek_search, seek_job, seek_similar_jobs, seek_suggest, seek_classifications, the company tools " +
     "(seek_company_search, seek_company, seek_company_reviews, seek_company_salaries, seek_company_jobs), the career-advice " +
-    "tools (seek_career_*), the recruiter directory (seek_recruiter_search, seek_recruiter), People search and seek_cv_read.",
+    "tools (seek_career_*, except the Career Compass quiz's recommendations and the reason, hide and unhide actions), the " +
+    "recruiter directory (seek_recruiter_search, seek_recruiter), People search and seek_cv_read.",
   "Signed in (seek_auth; check: true confirms it works): the profile and every section of it, résumés, saved jobs, saved " +
-    "searches, applied jobs, notes, recommendations, notifications, account settings and applying.",
+    "searches, applied jobs, notes, recommendations, the home feed (seek_home_feed, seek_refine_recommendations, " +
+    "seek_home_nudges), notifications, account settings, recording a call to a recruiter, and applying.",
+  "seek_job_insights' request flags (requestAiMatch, requestStrongFit, requestStandOut) spend the account's limited AI " +
+    "allowances; set them only when the user asks.",
   "Applying: seek_apply_requirements, then seek_apply with submit: false to dry-run, then submit: true. Applications are " +
     "real and cannot be withdrawn; never guess an answer for the user.",
   "Ids: seek_suggest returns the location ids and ontology ids the profile tools take; seek_classifications the " +
@@ -97,11 +102,12 @@ export function createServer() {
         "What applying to a job requires, before applying: whether it is off-site (externalApply), whether the " +
         "user has already applied (alreadyApplied) or saved it (saved), whether written selection criteria are " +
         "mandatory (selectionCriteriaRequired), and every employer question with its exact option ids. Use this " +
-        "before writing a cover letter or choosing answers — option ids are what an application submits.",
+        "before writing a cover letter or choosing answers — option ids are what an application submits. It also " +
+        "lists verificationNudges: Seek's prompts to verify an identity or credential for this job, with the link.",
       inputSchema: { id: z.string().describe('Seek job id, e.g. "94867040"') },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
-    ({ id }) => guard(() => applicationProcess(id.trim())),
+    ({ id }) => guard(() => applicationProcess(id.trim(), { verificationNudges: true })),
   );
 
   server.registerTool(
@@ -476,6 +482,7 @@ export function createServer() {
   registerCompanies(server);
   registerCareer(server);
   registerDirectory(server);
+  registerFeed(server);
   return server;
 }
 

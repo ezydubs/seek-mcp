@@ -1,7 +1,9 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { classifications, profileOptions, suggest } from "../discover.js";
-import { REPORT_REASONS, jobInsights, reportJob, requestJobMatch, similarJobs } from "../jobs.js";
+import {
+  REPORT_REASONS, jobInsights, reportJob, requestJobFit, requestJobMatch, searchRefinements, similarJobs,
+} from "../jobs.js";
 import { jobPreferences, recommendedJobs, updateJobPreferences } from "../activity.js";
 import { guard } from "../result.js";
 
@@ -16,19 +18,23 @@ export function register(server: McpServer) {
         "Seek's own autocomplete, which is also where the ids its forms need come from. kind: keywords and " +
         "search_locations complete job searches; profile_locations returns numeric location ids for seek_profile_update " +
         "and seek_preferences; role_titles, companies, schools, qualifications, skills, licences and languages return " +
-        "the ontologyId to pass with that value to the profile tools; rights_to_work returns right-to-work option ids. " +
+        "the ontologyId to pass with that value to the profile tools; rights_to_work returns right-to-work option ids; " +
+        "search_refinements takes a search's keywords (and where) and returns Seek's refinement pills for it: " +
+        "searchAssist (Seek's AI search assist) and related, each with the keywords to run in seek_search to apply it. " +
         "No sign-in.",
       inputSchema: {
         kind: z.enum([
           "keywords", "search_locations", "profile_locations", "role_titles", "companies", "schools",
-          "qualifications", "skills", "licences", "languages", "rights_to_work",
+          "qualifications", "skills", "licences", "languages", "rights_to_work", "search_refinements",
         ]),
-        query: z.string().describe('The text typed so far, e.g. "softw" or "ponsonby"'),
+        query: z.string().describe('The text typed so far, e.g. "softw" or "ponsonby"; for search_refinements the search keywords'),
+        where: z.string().optional().describe('For search_refinements: the search location, e.g. "All Auckland"'),
         count: z.number().int().min(1).max(20).optional(),
       },
       annotations: READ,
     },
-    ({ kind, query, count }) => guard(() => suggest(kind, query, count)),
+    ({ kind, query, where, count }) =>
+      guard(() => (kind === "search_refinements" ? searchRefinements(query, where, count) : suggest(kind, query, count))),
   );
 
   server.registerTool(
@@ -59,17 +65,32 @@ export function register(server: McpServer) {
       description:
         "What Seek works out about the signed-in candidate and one job: whether it is saved or applied to, which of the " +
         "ad's skills the profile matches, infers or lacks, whether the salary meets the candidate's expectation, the " +
-        "applicant count and résumé/cover-letter shares, and Seek's AI job-match assessment (\"should I apply?\"). " +
-        "requestAiMatch: true asks Seek to run that assessment now (it uses one of the account's limited allowances and " +
-        "can take a few seconds; call again to read it).",
+        "applicant count and résumé/cover-letter shares, and Seek's AI assessments: the job match (\"should I apply?\"), " +
+        "the strong fit (the candidate's strengths for the role) and stand out (three ways to stand out and a tailored " +
+        "personal summary). The request flags ask Seek's AI to run one now, and each run uses one of the account's " +
+        "limited AI allowances, so set them only when the user asks: requestAiMatch returns at once (call again to read " +
+        "it); requestStrongFit and requestStandOut wait up to about 40 seconds in all, and anything still in progress " +
+        "is read by calling again without the flags. Stand out builds on a finished strong fit, so with both set the " +
+        "strong fit is requested first.",
       inputSchema: {
         id: jobId,
         requestAiMatch: z.boolean().optional().describe("Ask Seek's AI to assess the fit now (uses an allowance)"),
+        requestStrongFit: z.boolean().optional().describe("Ask Seek's AI for the candidate's strengths for this job (uses an allowance)"),
+        requestStandOut: z.boolean().optional().describe("Ask Seek's AI how to stand out for this job (uses an allowance; needs a strong fit)"),
       },
       annotations: { readOnlyHint: false, openWorldHint: true },
     },
-    ({ id, requestAiMatch }) =>
-      guard(async () => (requestAiMatch ? { requested: await requestJobMatch(id), insights: await jobInsights(id) } : jobInsights(id))),
+    ({ id, requestAiMatch, requestStrongFit, requestStandOut }) =>
+      guard(async () => {
+        if (!requestAiMatch && !requestStrongFit && !requestStandOut) return jobInsights(id);
+        const requested = {
+          aiMatch: requestAiMatch ? await requestJobMatch(id) : undefined,
+          ...(requestStrongFit || requestStandOut
+            ? await requestJobFit(id, { strongFit: requestStrongFit, standOut: requestStandOut })
+            : {}),
+        };
+        return { requested, insights: await jobInsights(id) };
+      }),
   );
 
   server.registerTool(

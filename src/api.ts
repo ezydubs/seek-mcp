@@ -1,4 +1,5 @@
-import { ORIGIN, gql, seekGet } from "./auth.js";
+import { ORIGIN, gql, seekGet, sgql } from "./auth.js";
+import { ZONE, clean } from "./seek.js";
 
 const UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36";
@@ -230,9 +231,22 @@ export async function savedAndApplied(jobIds: string[]) {
   return Object.fromEntries(jobIds.map((id) => [id, { saved: saved.has(id), applied: applied.has(id) }]));
 }
 
-export async function applicationProcess(jobId: string) {
+export async function verificationNudges(jobId: string, selectedAnswerUris: string[] = []) {
+  const d = await sgql("GetVerifications", { jobId, selectedAnswerUris, zone: ZONE });
+  return [...(d?.viewer?.verificationNudges ?? [])]
+    .sort((a: any, b: any) => (a.rank ?? 0) - (b.rank ?? 0))
+    .map((n: any) =>
+      clean({ rank: n.rank, description: n.description, types: n.verificationType, action: n.ctaLabel, url: n.ctaUrl, uri: n.uri }),
+    );
+}
+
+export async function applicationProcess(jobId: string, opts: { verificationNudges?: boolean } = {}) {
   if (!/^\d+$/.test(jobId)) throw new Error(`Seek job ids are numeric; got "${jobId}"`);
-  const [data, flags] = await Promise.all([gql(PROCESS_QUERY, { jobId, isAuthenticated: true }), savedAndApplied([jobId])]);
+  const [data, flags, nudges] = await Promise.all([
+    gql(PROCESS_QUERY, { jobId, isAuthenticated: true }),
+    savedAndApplied([jobId]),
+    opts.verificationNudges ? verificationNudges(jobId).catch(() => null) : null,
+  ]);
   const p = data.jobApplicationProcess;
   if (!p) throw new Error(`Seek returned no application process for job ${jobId}`);
   const questions: Question[] = (p.questionnaire?.questions ?? []).map((q: any) => ({
@@ -254,6 +268,7 @@ export async function applicationProcess(jobId: string) {
     lastAppliedResumeId: p.documents?.lastAppliedResumeIdPrefill ?? null,
     lastCoverLetterMethod: p.documents?.lastCoverLetterMethod ?? null,
     questions,
+    ...(nudges?.length ? { verificationNudges: nudges } : {}),
   };
 }
 

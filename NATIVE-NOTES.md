@@ -324,3 +324,131 @@ matchLatestOnly }, companies: { values, matchLatestOnly }, visitorId } })`, `loc
 - The authorize request the site makes: `response_type=code`, `response_mode=query`, PKCE S256,
   `redirect_uri=https://nz.seek.com/oauth/callback/` (trailing slash), scope `openid profile email offline_access`,
   audience `https://seek/api/candidate`.
+
+## Unstable fields
+
+Seek refuses fields it marks unstable with `UNSTABLE_QUERY_ERROR` unless the request carries
+`x-custom-features: application/features.seek.all+json`; the check runs before authentication. The houston and company apps attach
+it per operation, every time they send one of: `GetCareerFeed`, `CareerFeedJobsNextBestQuestion`, `SubmitCareerFeedJobsRefinement`,
+`GetCareerFeedRecsRefinementStatus`, `CareerFeedProfilePerformanceInsightsSummary`, `jobDetailsPersonalised`,
+`jobDetailsWithPersonalised`, `CandidateJobMatch`, `CandidateJobMatchStrongFit`, `CandidateJobMatchStandOut`, the three
+`create…Request` mutations, `GetJobSearchAssist`, `SeoLandingCareerInsights` and `GetGraduatesTabData`. jobapply, settings and the
+recruiter directory send the same flag on every request as `Accept: application/features.seek.all+json` (alongside
+`application/json`; the features type alone is HTTP 406); profile and my-jobs send none. The server attaches the header to the 14 of
+these it uses (`featureHeaders` in src/seek.ts) and sends everything else as before.
+
+## AI job assessments (signed in; shapes checked live)
+
+`createCandidateJobMatchStrongFitRequest` and `createCandidateJobMatchStandOutRequest` take the same input:
+`{ jobId, experimentContext: { visitorId, channel: "chalice", platform: WEB, language: "en" } }` (the stand-out input type is newer
+than the embedded schema; confirmed live). Results: `…Exists` (strong fit: `matchStrengths`; stand out: `threeWaysToStandOut`,
+`personalSummary`), `…InProgress { waitForMs }`, `…ResultInvalid`, `…JobExpired`, `…NotEligible { qualifiers }`, and for stand out
+`…AllocationExhausted { retryAfter }` and `…IncompleteStrongFit`. `CandidateJobMatchStrongFit` / `CandidateJobMatchStandOut` read them
+back (`jobDetails.personalised.fit`). The documents select no `__typename` (Apollo adds it at request time), so the state is inferred
+from the fields. The site polls up to 50 times at `waitForMs`, offers stand out only once a strong fit exists, and switches from the
+job match to strong fit under `experiment-job-match-llm-phase-3`.
+
+## Home feed (signed in; shapes checked live)
+
+`GetCareerFeed` returns every recommendation at once (86+ jobs on a real account, about 1 KB each once shaped), so the server pages
+them. Components: `JOB`, `COMPANY_EVP`, `MARKET_INSIGHTS`, `PROFILE_PERFORMANCE_INSIGHTS` (live also `CAREER_INSIGHTS` and
+`PERSONALISED_INFLOW_MODULE`, newer than the embedded schema). The site sends `enrichmentModel` LOA or BREVITY
+(`experiment-career-feed-job-ai-summaries-v2`), `enableCareerFeedPreferencesCentre` (true for `experiment-career-feed-feedback-loops`
+v1/v2), `experiments: [{ key, value }]` for the flags it holds (`…feedback-loops`, `…profile-performance-analytics`,
+`experiment-recs-refinement-nbq`, `…career-assistant-ai-chat`, `experiment-discover-feed-about-me-scenario-1`) and
+`context: { recsRefinementToken }` after a refinement. The server sends LOA, the preferences centre, `feedback-loops v2`,
+`profile-performance-analytics show` and `recs-refinement-nbq nbq-v2`. The refinement's `recsServiceToken` is the first job node's
+`serviceToken`, not `careerFeed.serviceToken`.
+
+`CareerFeedInsights` takes `roleTitleId` = the market-insights role's `uri` (e.g. `http://graph.seek.com/role-title/accountant`) and
+`locationId` = `String(location.id)`; `adVolumeShift.count` is this week's open roles. `CareerFeedProfilePerformanceInsightsSummary`
+takes `{ durationInDays }`. `GetSalaryNudge` takes `zone` as a String.
+
+## Refining recommendations (signed in; shapes checked live)
+
+`CareerFeedJobsNextBestQuestion({ input: { channel: HOME, platform: WEB, visitorId, zone, recsServiceToken, experiments:
+[{ key: "experiment-recs-refinement-nbq", value }] } })`; the card shows for `nbq-v2` and `nbq-v3`. While `…StatusInProgress` the site
+asks again with `serviceToken` and no `previousItem`; for follow-ups it sends `previousItem`, a single object (the live schema renamed
+`previousItems`). nbq-v2 submits every answer at the end, nbq-v3 after each; "Other" goes as `"Other: <text>"`.
+`SubmitCareerFeedJobsRefinement({ input: { channel, items: [{ id, question, options, answers }], platform, recsServiceToken, visitorId,
+zone } })` (the site also sends `experiments`, which the embedded schema lacks; Seek accepts the input without it), then
+`GetCareerFeedRecsRefinementStatus({ refinementToken })` until `…Ready`, then `GetCareerFeed` with `context.recsRefinementToken`.
+
+## Home prompts (signed in; shapes checked live)
+
+`AddSalaryNudgeFeedback({ nudgeId, nudgeOption, zone })`: the option is the chosen call-to-action's `operation`, or `"Dismiss"`.
+`UpdateMarketInsightsPreferences({ input: { role: { uri }, location: { id: String } } })`. `ConfirmProfileUpToDate` takes nothing; its
+card has empty content in this build, so the site never shows it.
+
+## Search refinement pills (no login, tested)
+
+`jobsearch/v5/search?include=asyncpills,pills` returns `suggestions.pills` and `suggestions.asyncPillsToken`.
+`GetJobSearchAssist({ visitorId, tokens: [asyncPillsToken] })` (exactly one token; an empty list or a bad one gives
+INTERNAL_SERVER_ERROR) returns `pills.data[] { label, keywords, isActive, stateToken }`. Applying a pill means searching with its
+keywords; `stateToken` is not valid Base64Url and nothing in this build reads it. v5's `totalCount` is wrong below `pageSize: 5`
+(accountant in All Wellington: 7 at 1 or 2, 157 at 5 or 20), so the lookup asks for a page of 20.
+
+## Verified licences and qualifications (signed in; shapes checked live)
+
+An item is verified when `credential` is non-null (`credentialInfo`, `manageVerificationUrl`, `deleteVerificationUrl`). Only
+`UpdateVerifiedLicence({ verifiedLicenceData: { id, description } })` and `UpdateVerifiedQualification({ verifiedQualificationData:
+{ id, highlights }, languageCode, zone })` change one; the site never deletes one through the API but opens `deleteVerificationUrl`.
+
+## More profile reads (signed in; shapes checked live)
+
+`GetSuggestions` → `viewer.profileSuggestions[] { message, action { label, context { card, field, mode, itemId } } }`, shown under
+profile strength. `GetResumePrivacyDisclaimers` also works signed out; paragraphs with `isEmphasized` are headings.
+`GetVerifications({ jobId, selectedAnswerUris, zone })` → `viewer.verificationNudges[] { uri, ctaLabel, ctaUrl, description, rank,
+verificationType }`: the apply app passes the selected options' `uri`s, digital-ID nudges have `uri: ""`, and the site wraps `ctaUrl` in a
+SEEK Pass transition URL.
+
+## Recruiter directory: more (no login, tested)
+
+`FeaturedRecruiters` / `FeaturedAgencies` take `country: "New Zealand"` (`"NZ"` gives INTERNAL_SERVER_ERROR) and return 15 items,
+reshuffled on each call, without paging. `GetSourcrAwards({ slug, type: RECRUITER | AGENCY, limit })` is `null` when there are none;
+`source` `sara` = SEEK Annual Recruitment Awards, `sourcr` = Recognition In Service Excellence.
+`ContactRecruiterByCall` has no variables and nothing in the request identifies the recruiter. Signed in, the Call button sends it
+(bearer token, `x-seek-site: recruiter-directory`) and then shows the directory's public number: it records a call against the
+candidate's contact allowance (`GetContactCapabilities` → `{ type, enabled, activeCount, maxActive, ttlHours, reasonCode }`) and calls
+nobody. Signed out the button goes to sign-in with `pendingAction=call`.
+
+## Companies: graduates and industries (no login, tested)
+
+`GetGraduatesTabData` takes `brand: "seek"`, `channel: "web"`, `country: "NZ"` (the `JobSearchV7*` types are case-sensitive custom
+scalars: brand seek|jobsdb|jobstreet, channel web|mobileApp|mobileWeb|email|push), `draft: false`, `locale`, `pageSize`;
+`graduates.jobs` needs the unstable-fields header. Rich text comes as arrays of paragraphs. NZ companies with a Graduates tab include EY
+177568768485850 and Chartered Accountants ANZ 178599154284956.
+`GroupedCompanies({ groupBy: { group: INDUSTRY, value: [industryId] }, perPage, randomSeed, zone, excludedCompanyIds })`: industry ids
+run `I0000`–`I0089` (a company's `overview.industryId`; the table is in src/companies.ts), only the first value counts, nothing comes back
+without `randomSeed` (the site sends today's UTC date), and `sortBy: REVIEWS_COUNT` ignores `value` and `perPage` (18 sector groups, as
+on the companies home page).
+
+## Career advice API: more (no login, tested)
+
+Introspection is enabled on `career-guide-api…/graphql`; validation errors come back masked as HTTP 400 "Internal server error".
+`roleByAlias.pathwayRoles(input: { cgRolesSize, nonCgRoleSize, isDivergent, minSalaryLiftPercent, maxSalaryLiftPercent })` (default 5;
+`isDivergent` for other fields; the site sends `{ cgRolesSize: 3 }` and keeps `isReleased` roles). `jobCountV2` and
+`jobSearch(keywords, locationId: String, classifications, subclassifications, userId, size)`: `locationId` is the job-search region id
+(1018 All Auckland, 1019 All Wellington, 5113 All Canterbury; 3001 New Zealand, the default; 3000 Australia), and jobs come back with
+`url: null`. `rolesBySpecReqIds(input: { specReqIds, size, maxSpecReqOrder })` with `specReqs(input: { types, size })` takes bare UUIDs
+(nz.seek.com's skill ids minus the `https://graph.cloud.seek.com/Spec-Req/` prefix). `searchV2(filter: Filter)` with
+`aggClassifications` / `aggThemes` counts roles: `Filter { types: [ROLE…], classifications: [exact name], themes: [exact label], salary,
+salaryMax, growth, satisfaction, reviewTotal }`. `unifiedArticlesByTopCategoryAlias` only answers explore-careers, job-hunting and
+working-life; `featuredContent` has 29 items; `articlesForRoles(size: 4)` is "Popular on SEEK", a random sample. 4 of 1,175 roles have a
+`role_id` that differs from the alias (RoleBlurb takes `role_id`).
+
+## Career Compass (egads endpoint)
+
+`https://career-guide-api.cloud.seek.com.au/egads`: no introspection, unmasked validation errors; root fields `question`,
+`questionCount`, `getRoleRecommendationBlurb`, `getABCDProfile` and the mutation `hideRecommendation`. Headers: `x-seek-site:
+skl-career-guide-site`, `apollographql-client-name: Career advice site`, and when signed in `authorization: Bearer <the candidate access
+token>`. `questionCount` is 7: steps 0–3 multiple choice, 4 free text, 5 the current role, 6 the recommendations (`JobsRec`, which needs a
+sign-in; without one it fails with "Cannot read properties of null (reading 'authToken')"). `previousAnswers` lists the answers in
+order as `QuestionAnswer { multichoice { selectedChoices } | freeText { answer } | profileFields { values: [{ field: "RoleTitle", value
+}] } }`. RoleBlurb and `hideRecommendation` answer `UNAUTHORIZED` without a token. The NZ site has retired the page
+(`/career-advice/compass` is 404), but the API still answers.
+
+## In the bundles but on no live endpoint
+
+`HybridRoleSuggest` (`vectorHybridRoleSuggest`), `GetQuestions`, `GetQuestion` and `GetNewAnswers` are generated hooks nothing imports;
+the career API (43 root fields), the egads endpoint and nz.seek.com all answer `Cannot query field`, so the server has none of them.

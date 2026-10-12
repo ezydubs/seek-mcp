@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { readChromeLocalStorage } from "./chrome-storage.js";
 import { D, type DocumentName } from "./documents.js";
-import { ORIGIN, opName } from "./seek.js";
+import { ORIGIN, featureHeaders, opName } from "./seek.js";
 
 export { ORIGIN };
 const ISSUER = "https://login.seek.com/";
@@ -97,6 +97,8 @@ async function renew(force = false): Promise<StoredToken> {
   return refreshing;
 }
 
+export const accessToken = async (force = false): Promise<string> => (await renew(force)).access_token;
+
 async function currentToken(force: boolean): Promise<StoredToken> {
   const cur = readStore();
   if (!cur) throw new NotLoggedInError("No Seek sign-in. Run seek_auth first.");
@@ -174,7 +176,7 @@ export async function gql<T = any>(
   const send = async (token: string) => {
     const r = await fetch(`${ORIGIN}/graphql`, {
       method: "POST",
-      headers: graphqlHeaders(token),
+      headers: { ...graphqlHeaders(token), ...featureHeaders(operationName) },
       body: JSON.stringify([{ ...(operationName ? { operationName } : {}), query, variables }]),
     });
     const text = await r.text();

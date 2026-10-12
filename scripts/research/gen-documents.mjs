@@ -40,6 +40,16 @@ const OPS = [
   "GetRoleGrowth", "GetRoleClassifications", "GetSalarySuggestionByRoleAndLocation", "GetRoleClassSalariesById",
   "GetArticleV2", "GetLatestArticles", "GetArticlesByCategoryId", "GetCategoryByAlias", "Classifications",
   "GetRolesByClassificationUrl",
+  "GetCareerFeed", "CareerFeedJobsNextBestQuestion", "SubmitCareerFeedJobsRefinement", "GetCareerFeedRecsRefinementStatus",
+  "CareerFeedInsights", "CareerFeedProfilePerformanceInsightsSummary", "CandidateJobMatchStandOut",
+  "createCandidateJobMatchStandOutRequest", "CandidateJobMatchStrongFit", "createCandidateJobMatchStrongFitRequest",
+  "GetJobSearchAssist", "GetSalaryNudge", "AddSalaryNudgeFeedback", "UpdateMarketInsightsPreferences", "ConfirmProfileUpToDate",
+  "UpdateVerifiedLicence", "UpdateVerifiedQualification", "GetSuggestions", "GetResumePrivacyDisclaimers", "GetVerifications",
+  "GetPathwayRolesBase", "GetRolesBySkills", "RoleBlurb", "GetArticlesForRoles", "GetJobCount", "GetLatestJobs", "GetSnapshot",
+  "RoleByIndustryCount", "RoleByThemeCount", "GetUnifiedTopFeaturedArticle", "FeaturedContent", "HideRecommendation",
+  "Question", "QuestionCount",
+  "FeaturedAgencies", "FeaturedRecruiters", "GetSourcrAwards", "ContactRecruiterByCall",
+  "GetGraduatesTabData", "GroupedCompanies",
 ];
 
 const missing = OPS.filter((n) => !catalog[n]);

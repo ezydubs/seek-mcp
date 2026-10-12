@@ -1,8 +1,8 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import {
-  REVIEW_FLAG_REASONS, company, companyJobs, companyReviewLocations, companyReviews, companySalaries, searchCompanies,
-  voteOrFlagReview,
+  REVIEW_FLAG_REASONS, companiesByIndustry, company, companyGraduates, companyJobs, companyReviewLocations, companyReviews,
+  companySalaries, industryList, searchCompanies, voteOrFlagReview,
 } from "../companies.js";
 import { guard } from "../result.js";
 
@@ -13,11 +13,26 @@ export function register(server: McpServer) {
   server.registerTool(
     "seek_company_search",
     {
-      description: "Find company profiles on Seek by name, with their ids, review counts and ratings. No sign-in.",
-      inputSchema: { name: z.string(), limit: z.number().int().min(1).max(30).optional() },
+      description:
+        "Find company profiles on Seek by name, with their ids, review counts and ratings. Or browse by industry: industry " +
+        "takes an industry id (\"I0008\") or name (\"Banking & Credit\"; a unique part such as \"legal\" works) and returns " +
+        "the companies Seek groups under it, in a shuffled order that changes daily; industries: true lists Seek's " +
+        "industries with their ids (seek_company also shows a company's industryId). No sign-in.",
+      inputSchema: {
+        name: z.string().optional(),
+        industry: z.string().optional().describe('Industry id or name, e.g. "I0053" or "Legal Services"'),
+        industries: z.boolean().optional().describe("List the industry ids and names"),
+        limit: z.number().int().min(1).max(30).optional().describe("Default 10 for a name, 20 for an industry"),
+      },
       annotations: READ,
     },
-    ({ name, limit }) => guard(() => searchCompanies(name, limit)),
+    ({ name, industry, industries, limit }) =>
+      guard(async () => {
+        if (industries) return industryList();
+        if (industry?.trim()) return companiesByIndustry(industry, limit);
+        if (!name?.trim()) throw new Error("Pass name, industry, or industries: true");
+        return searchCompanies(name, limit);
+      }),
   );
 
   server.registerTool(
@@ -26,11 +41,16 @@ export function register(server: McpServer) {
       description:
         "A company's Seek profile: overview, size, industry, website, specialities, culture and values, perks, awards, " +
         "employee ratings by category (career, management, work-life balance, diversity, pay…) and Seek's AI summary of " +
-        "its reviews. organisationId lists its jobs (seek_company_jobs or seek_search companyId). No sign-in.",
-      inputSchema: { company: companyRef },
+        "its reviews. organisationId lists its jobs (seek_company_jobs or seek_search companyId). section graduates gives " +
+        "the profile's Graduates tab instead: graduate programmes with eligibility and details, application steps, " +
+        "graduate stories, videos and graduate jobs (graduates: false when the company has none). No sign-in.",
+      inputSchema: {
+        company: companyRef,
+        section: z.enum(["profile", "graduates"]).optional().describe('Default "profile"'),
+      },
       annotations: READ,
     },
-    ({ company: ref }) => guard(() => company(ref)),
+    ({ company: ref, section }) => guard(() => (section === "graduates" ? companyGraduates(ref) : company(ref))),
   );
 
   server.registerTool(

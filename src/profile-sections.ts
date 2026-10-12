@@ -7,13 +7,34 @@ import { COUNTRY, LANGUAGE, LOCALE, ORIGIN, PLATFORM, TIMEZONE, ZONE, clean, ont
 type Vars = Record<string, unknown>;
 const LZ = { languageCode: LANGUAGE, zone: ZONE };
 
+const markVerified = (x: any) => (x?.credential ? { ...x, verified: true } : x);
+
+const suggestion = (s: any) => ({
+  message: s.message,
+  action: s.action?.label,
+  section: s.action?.context?.card,
+  field: s.action?.context?.field,
+  itemId: s.action?.context?.itemId,
+});
+
+function privacyNotes(r: any) {
+  if (!r) return null;
+  const sections: Array<{ heading?: string; text: string[] }> = [];
+  for (const p of r.longParagraphs ?? []) {
+    if (p.isEmphasized) sections.push({ heading: p.value, text: [] });
+    else if (sections.length) sections[sections.length - 1].text.push(p.value);
+    else sections.push({ text: [p.value] });
+  }
+  return { summary: (r.shortParagraphs ?? []).map((p: any) => p.value).join(" "), sections };
+}
+
 const SECTIONS: Record<string, { doc: Parameters<typeof sgql>[0]; vars: Vars; pick: (d: any) => unknown }> = {
   summary: { doc: "GetCareerObjectives", vars: {}, pick: (d) => d.viewer?.careerObjectives?.personalStatement ?? null },
   roles: { doc: "GetConfirmedRoles", vars: {}, pick: (d) => d.viewer?.confirmedRoles },
   suggestedRoles: { doc: "GetUnconfirmedRoles", vars: {}, pick: (d) => d.viewer?.unconfirmedRoles },
-  education: { doc: "GetConfirmedQualifications", vars: LZ, pick: (d) => d.viewer?.confirmedQualifications },
+  education: { doc: "GetConfirmedQualifications", vars: LZ, pick: (d) => d.viewer?.confirmedQualifications?.map(markVerified) },
   suggestedEducation: { doc: "GetUnconfirmedQualifications", vars: LZ, pick: (d) => d.viewer?.unconfirmedQualifications },
-  licences: { doc: "GetLicences", vars: LZ, pick: (d) => d.viewer?.licences },
+  licences: { doc: "GetLicences", vars: LZ, pick: (d) => d.viewer?.licences?.map(markVerified) },
   skills: { doc: "GetSkills", vars: {}, pick: (d) => d.viewer?.skills2?.map((s: any) => s.keyword) },
   suggestedSkills: { doc: "GetSuggestedSkills", vars: LZ, pick: (d) => d.viewer?.suggestedSkills?.map((s: any) => s.keyword) },
   languages: { doc: "GetLanguageProficiencies", vars: {}, pick: (d) => d.viewer?.languageProficiencies },
@@ -28,10 +49,12 @@ const SECTIONS: Record<string, { doc: Parameters<typeof sgql>[0]; vars: Vars; pi
   visibility: { doc: "GetProfileVisibility2", vars: { locale: LOCALE }, pick: (d) => d.viewer?.profileVisibility2 },
   avatar: { doc: "GetProfileAvatar", vars: {}, pick: (d) => d.viewer?.profileAvatar },
   strength: { doc: "GetScore", vars: LZ, pick: (d) => d.viewer?.score },
+  suggestions: { doc: "GetSuggestions", vars: LZ, pick: (d) => d.viewer?.profileSuggestions?.map(suggestion) },
   activity: { doc: "GetProfileInsights", vars: { zone: ZONE, locale: LOCALE, timezone: TIMEZONE }, pick: (d) => d.viewer?.profileInsights2 },
   verifications: { doc: "getVerifications", vars: { zone: ZONE, locale: LOCALE }, pick: (d) => d.viewer?.profileVerifications },
   references: { doc: "getReferenceChecks", vars: { locale: LOCALE }, pick: (d) => d.viewer?.referenceChecks },
   publicProfile: { doc: "GetPublicProfile", vars: { zone: ZONE, locale: LOCALE, platform: PLATFORM }, pick: (d) => d.viewer?.publicProfile },
+  resumePrivacy: { doc: "GetResumePrivacyDisclaimers", vars: LZ, pick: (d) => privacyNotes(d.resumePrivacyDisclaimers) },
 };
 export const PROFILE_SECTIONS = Object.keys(SECTIONS) as [string, ...string[]];
 
@@ -117,15 +140,41 @@ const qualificationInput = (q: QualificationArgs) => ({
   ...(q.highlights ? { highlights: q.highlights } : {}),
 });
 
-async function existing(section: "education" | "licences", id: string): Promise<any> {
+async function find(section: "education" | "licences", id: string): Promise<any> {
   const list: any[] = ((await profileSections([section])) as any)[section] ?? [];
-  const hit = list.find((x) => x.id === id);
+  return list.find((x) => x.id === id);
+}
+
+async function existing(section: "education" | "licences", id: string): Promise<any> {
+  const hit = await find(section, id);
   if (!hit) throw new Error(`No ${section === "education" ? "qualification" : "licence"} ${id} on the profile (see seek_profile sections ["${section}"])`);
   return hit;
 }
 
+function verifiedOnly(what: string, cur: any, allowed: string, given: Record<string, unknown>) {
+  const other = Object.keys(given).filter((k) => k !== "id" && k !== allowed && given[k] !== undefined);
+  const manage = cur.credential?.manageVerificationUrl;
+  if (other.length) {
+    throw new Error(
+      `${what} ${cur.id} is verified, so Seek only lets its ${allowed} change, not ${other.join(", ")}` +
+        (manage ? `; the verified details are managed at ${manage}` : ""),
+    );
+  }
+  if (given[allowed] === undefined) throw new Error(`${what} ${cur.id} is verified: pass ${allowed}, the only field Seek lets change`);
+}
+
+function refuseVerifiedDelete(what: string, cur: any) {
+  if (!cur?.credential) return;
+  const url = cur.credential.deleteVerificationUrl;
+  throw new Error(
+    `${what} ${cur.id} is verified; Seek removes a verified credential through its verifier rather than deleting it from the profile` +
+      (url ? `: ${url}` : ""),
+  );
+}
+
 export async function upsertQualification(q: Partial<QualificationArgs> & { id?: string }) {
   const cur = q.id ? await existing("education", q.id) : {};
+  if (cur.credential) return updateVerifiedQualification(cur, q);
   const name = q.name ?? cur.name?.text;
   const institute = q.institute ?? cur.institute?.text;
   if (!name || !institute) throw new Error("A qualification needs name and institute");
@@ -144,7 +193,20 @@ export async function upsertQualification(q: Partial<QualificationArgs> & { id?:
   return { id: qualification.id, saved: true, education: (await profileSections(["education"]) as any).education };
 }
 
+async function updateVerifiedQualification(cur: any, q: Partial<QualificationArgs>) {
+  verifiedOnly("Qualification", cur, "highlights", q);
+  const d = await sgql("UpdateVerifiedQualification", { verifiedQualificationData: { id: cur.id, highlights: q.highlights || null }, ...LZ });
+  const list = d?.updateVerifiedQualification?.viewer?.confirmedQualifications;
+  return {
+    id: cur.id,
+    saved: true,
+    verified: true,
+    education: list ? clean(list.map(markVerified)) : (await profileSections(["education"]) as any).education,
+  };
+}
+
 export async function deleteQualification(id: string) {
+  refuseVerifiedDelete("Qualification", await find("education", id));
   await sgql("DeleteQualification", { qualificationId: { id }, ...LZ });
   return { deleted: id };
 }
@@ -187,6 +249,7 @@ const monthYearOf = (d: any) => (d?.year && d?.month ? { year: d.year, month: d.
 
 export async function upsertLicence(l: Partial<LicenceArgs> & { id?: string }) {
   const cur = l.id ? await existing("licences", l.id) : {};
+  if (cur.credential) return updateVerifiedLicence(cur, l);
   const id = l.id ?? randomUUID();
   const name = l.name ?? cur.name?.text;
   if (!name) throw new Error("A licence needs a name");
@@ -206,7 +269,14 @@ export async function upsertLicence(l: Partial<LicenceArgs> & { id?: string }) {
   return { id, saved: true, licences: (await profileSections(["licences"]) as any).licences };
 }
 
+async function updateVerifiedLicence(cur: any, l: Partial<LicenceArgs>) {
+  verifiedOnly("Licence", cur, "description", l);
+  await sgql("UpdateVerifiedLicence", { verifiedLicenceData: { id: cur.id, description: l.description || null } });
+  return { id: cur.id, saved: true, verified: true, licences: (await profileSections(["licences"]) as any).licences };
+}
+
 export async function deleteLicence(id: string) {
+  refuseVerifiedDelete("Licence", await find("licences", id));
   await sgql("DeleteLicence", { deleteLicenceInput: { id }, ...LZ });
   return { deleted: id };
 }

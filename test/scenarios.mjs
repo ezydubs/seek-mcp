@@ -10,7 +10,17 @@ writeFileSync(PNG, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
 
 export const ROLE_ID = "11111111-1111-4111-8111-111111111111";
 export const RESUME_ID = "22222222-2222-4222-8222-222222222222";
+export const VERIFIED_ID = "33333333-3333-4333-8333-333333333333";
 export const EMAIL = "candidate@example.com";
+export const RECS_TOKEN = "44444444-4444-4444-8444-444444444444";
+export const REFINEMENT_TOKEN = "55555555-5555-4555-8555-555555555555";
+export const ROLE_URI = "http://graph.seek.com/role-title/accountant";
+const NBQ_QUESTION = { id: "q1", question: "Which work arrangement suits you?", options: ["Hybrid", "Remote", "Other"] };
+
+const CREDENTIAL = {
+  verification: { result: "verified" }, credentialInfo: [{ name: "Licence number", values: ["AB1234"] }],
+  manageVerificationUrl: "https://verify.example.test/manage", deleteVerificationUrl: "https://verify.example.test/delete",
+};
 
 export const CANNED = {
   GetUserDetails: { viewer: { _id: "1", emailAddress: EMAIL } },
@@ -54,12 +64,63 @@ export const CANNED = {
   deleteAccount: { deleteAccount: { __typename: "DeleteAccountSuccess", ref: "r" } },
   changeEmailStart: { changeEmailStart: { ref: "r" } },
   changeEmailVerify: { changeEmailVerify: { ref: "r" } },
+  GetLicences: {
+    viewer: { _id: "1", licences: [{ id: VERIFIED_ID, name: { text: "Forklift Licence", ontologyId: null }, noExpiryDate: true, description: "Counterbalance", credentialType: "Licence", credential: CREDENTIAL }] },
+  },
+  GetConfirmedQualifications: {
+    viewer: { _id: "1", confirmedQualifications: [{ id: VERIFIED_ID, name: { text: "BCom" }, institute: { text: "University of Auckland" }, completed: true, completionDate: { year: 2019 }, credential: CREDENTIAL }] },
+  },
+  GetVerifications: {
+    viewer: { _id: "1", verificationNudges: [{ uri: "", ctaLabel: "Verify now", ctaUrl: "https://verify.example.test/id", description: "Digital identity", rank: 1, verificationType: ["digital_identity"] }] },
+  },
+  SeekDirectoryRecruiterProfileDetails: { sourcr: { recruiterProfileDetails: { name: "Some One", slug: "someone", contactNumber: "021000000" } } },
+  GetContactCapabilities: { sourcr: { contactCapabilities: { capabilities: [{ type: "CALL", enabled: true, activeCount: 0, maxActive: 5, ttlHours: 24 }] } } },
+  ContactRecruiterByCall: { contactRecruiterByCall: { message: "recorded" } },
+  createCandidateJobMatchStrongFitRequest: {
+    createCandidateJobMatchStrongFitRequest: { createdAt: "2026-10-12T00:00:00.000Z", matchStrengths: "Five years of month-end reporting", trackingId: "66666666-6666-4666-8666-666666666666" },
+  },
+  GetCareerFeed: {
+    careerFeed: {
+      serviceToken: "33333333-3333-4333-8333-333333333333",
+      edges: [
+        { node: { __typename: "CareerFeedJob", id: "95000001", jobId: "95000001", serviceToken: RECS_TOKEN, job: { id: "95000001", title: "Accountant", advertiser: { name: "Acme" } } } },
+        { node: { __typename: "CareerFeedPersonalMarketInsights", id: "mi1", role: { id: "accountant", uri: ROLE_URI, roleTitle: "Accountant" }, location: { id: "1018", label: "All Auckland" } } },
+        {
+          node: {
+            __typename: "CareerFeedProfilePerformanceInsights", id: "pp1",
+            item: { __typename: "CareerFeedProfilePerformanceInsightsActivitiesItem", id: "i1", durationInDays: 30, data: { __typename: "CareerFeedProfilePerformanceInsightsActivitiesItemSearchesData", count: 12 } },
+          },
+        },
+      ],
+    },
+  },
+  GetSalaryNudge: {
+    viewer: { salaryNudge: { id: "nudge-1", firstName: "A", prompt: "Is $90,000 still right?", text: "Keep your salary up to date", imageUrl: "", callToActions: [{ displayText: "Yes", operation: "Yes" }, { displayText: "No", operation: "No" }] } },
+  },
+  CareerFeedJobsNextBestQuestion: {
+    careerFeedJobsNextBestQuestion: {
+      status: {
+        __typename: "CareerFeedJobsNextBestQuestionStatusReady", serviceToken: "77777777-7777-4777-8777-777777777777",
+        questions: [{ id: NBQ_QUESTION.id, question: NBQ_QUESTION.question, options: NBQ_QUESTION.options.map((value) => ({ __typename: "CareerFeedJobsNextBestQuestionSelectionOption", value })) }],
+      },
+    },
+  },
+  SubmitCareerFeedJobsRefinement: {
+    submitCareerFeedJobsRefinement: { __typename: "SubmitCareerFeedJobsRefinementSuccess", status: { __typename: "CareerFeedJobsRefinementStatusInProgress", refinementToken: REFINEMENT_TOKEN, waitForMs: 1 } },
+  },
+  GetCareerFeedRecsRefinementStatus: {
+    careerFeedJobsRefinementStatus: { __typename: "CareerFeedJobsRefinementStatusReady", refinementToken: REFINEMENT_TOKEN },
+  },
+  UpdateMarketInsightsPreferences: { updateMarketInsightsPreferences: { __typename: "UpdateMarketInsightsPreferencesSuccess", message: "ok" } },
+  AddSalaryNudgeFeedback: { addSalaryNudgeFeedback: { nudgeId: "nudge-1" } },
+  ConfirmProfileUpToDate: { confirmProfileUpToDate: { confirmedDate: { dateTimeUtc: "2026-10-12T00:00:00.000Z" } } },
 };
 
 export const ANONYMOUS_CAPABLE = new Set([
   "CreateReportedJob", "ContactRecruiterByEmail", "PostProfileReport", "PostCompanyProfileReviewFlag",
   "PostCompanyProfileReviewUpvotes", "Mutation", "SubscribeToEmail", "SubscribeToAdviceAndTipsHome",
   "CreateUnregisteredApacSavedSearchWithChecksum", "UnsubscribeApacSavedSearchByCode", "updateNotificationCtpSubscriptionWithToken",
+  "ContactRecruiterByCall",
 ]);
 
 export const SCENARIOS = [
@@ -67,10 +128,20 @@ export const SCENARIOS = [
   ["profile sections (all)", (m) => m.sections.profileSections(["all"])],
   ["saved jobs", (m) => m.api.savedJobs()],
   ["applied jobs", (m) => m.api.appliedJobs()],
-  ["apply requirements", (m) => m.api.applicationProcess("95000001")],
+  ["apply requirements", (m) => m.api.applicationProcess("95000001", { verificationNudges: true })],
   ["job details signed in", (m) => m.jobs.jobDetails("95000001")],
   ["job insights", (m) => m.jobs.jobInsights("95000001")],
   ["job match request", (m) => m.jobs.requestJobMatch("95000001")],
+  ["strong fit then stand out", (m) => m.jobs.requestJobFit("95000001", { strongFit: true, standOut: true })],
+  ["stand out alone", (m) => m.jobs.requestJobFit("95000001", { standOut: true })],
+  ["home feed", (m) => m.feed.homeFeed()],
+  ["home feed refined, other market", (m) => m.feed.homeFeed({ refinementToken: REFINEMENT_TOKEN, market: { roleUri: ROLE_URI, locationId: 1019 } })],
+  ["refinement questions", (m) => m.feed.refineRecommendations()],
+  ["submit refinement", (m) => m.feed.refineRecommendations({ recsServiceToken: RECS_TOKEN, answers: [{ ...NBQ_QUESTION, answers: ["Other: four-day week"] }] })],
+  ["home nudges", (m) => m.feed.homeNudges()],
+  ["answer salary nudge", (m) => m.feed.homeNudges({ salaryAnswer: { nudgeId: "nudge-1", option: "Yes" } })],
+  ["market insights preferences", (m) => m.feed.homeNudges({ marketInsights: { roleUri: ROLE_URI, locationId: 1019 } })],
+  ["confirm profile up to date", (m) => m.feed.homeNudges({ confirmProfileUpToDate: true })],
   ["report job", (m) => m.jobs.reportJob({ id: "95000001", reason: "Misleading", comment: "test", email: EMAIL })],
   ["recommended jobs", (m) => m.activity.recommendedJobs()],
   ["job preferences", (m) => m.activity.jobPreferences()],
@@ -122,6 +193,11 @@ export const SCENARIOS = [
   ["review helpful", (m) => m.companies.voteOrFlagReview({ company: "171714227249285", reviewId: "r1", action: "helpful" })],
   ["review flag", (m) => m.companies.voteOrFlagReview({ company: "171714227249285", reviewId: "r1", action: "flag", reason: "spam", details: "advert" })],
   ["contact recruiter", (m) => m.directory.contactRecruiter({ slug: "someone", name: "A B", email: EMAIL, message: "Hello", phone: "0211234567" })],
+  ["profile suggestions and résumé privacy", (m) => m.sections.profileSections(["suggestions", "resumePrivacy"])],
+  ["update verified licence", (m) => m.sections.upsertLicence({ id: VERIFIED_ID, description: "Counterbalance and reach trucks" })],
+  ["update verified qualification", (m) => m.sections.upsertQualification({ id: VERIFIED_ID, highlights: "Dean's list" })],
+  ["verification nudges for chosen answers", (m) => m.api.verificationNudges("95000001", ["https://graph.seek.com/answer/example"])],
+  ["call recruiter", (m) => m.directory.callRecruiter({ slug: "someone" })],
   ["upload résumé", (m) => m.apply.uploadResume(PDF, { makeDefault: false })],
   ["upload avatar", (m) => m.sections.uploadAvatar(PNG)],
   ["prepare with uploaded documents", (m) => m.apply.prepareApplication({ jobId: "95000001", resumeId: RESUME_ID, coverLetterPath: PDF, selectionCriteriaPath: PDF })],
@@ -133,9 +209,10 @@ export const SCENARIOS = [
 ];
 
 export async function loadModules() {
-  const [api, apply, jobs, activity, sections, settings, companies, directory] = await Promise.all([
+  const [api, apply, jobs, activity, sections, settings, companies, directory, feed] = await Promise.all([
     import("../dist/api.js"), import("../dist/apply.js"), import("../dist/jobs.js"), import("../dist/activity.js"),
     import("../dist/profile-sections.js"), import("../dist/settings.js"), import("../dist/companies.js"), import("../dist/directory.js"),
+    import("../dist/feed.js"),
   ]);
-  return { api, apply, jobs, activity, sections, settings, companies, directory };
+  return { api, apply, jobs, activity, sections, settings, companies, directory, feed };
 }

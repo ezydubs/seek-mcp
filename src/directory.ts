@@ -1,5 +1,7 @@
-import { isSignedIn, sgql } from "./auth.js";
+import { NotLoggedInError, isSignedIn, sgql } from "./auth.js";
 import { COUNTRY, LOCALE, ORIGIN, VISITOR_ID, clean, publicGql } from "./seek.js";
+
+const DIRECTORY_COUNTRY = "New Zealand";
 
 const call = (name: Parameters<typeof publicGql>[0], vars: Record<string, unknown>, headers?: Record<string, string>) =>
   isSignedIn()
@@ -86,10 +88,10 @@ export async function searchRecruiters(p: {
 }) {
   const filters: Array<{ name: string; values: string[] }> = [];
   if (p.reviewedInLast12Months ?? true) filters.push({ name: "LAST_REVIEW_DATE", values: ["last12Months"] });
-  filters.push({ name: "COUNTRY", values: [p.country ?? "New Zealand"] });
+  filters.push({ name: "COUNTRY", values: [p.country ?? DIRECTORY_COUNTRY] });
   if (p.region) {
     const f = (await publicGql("GetFiltersData"))?.sourcr?.searchFilters;
-    const country = (f?.locations ?? []).find((l: any) => l.country === (p.country ?? "New Zealand"));
+    const country = (f?.locations ?? []).find((l: any) => l.country === (p.country ?? DIRECTORY_COUNTRY));
     const hit = (country?.postcodes ?? []).find((pc: any) => pc.name.toLowerCase() === p.region!.toLowerCase());
     if (!hit) throw new Error(`Unknown region "${p.region}" (regions: ${(country?.postcodes ?? []).map((x: any) => x.name).join(", ")})`);
     filters.push({ name: "POSTCODE", values: [hit.value] });
@@ -110,6 +112,18 @@ export async function searchRecruiters(p: {
   });
 }
 
+export async function featuredRecruiters(type?: "recruiter" | "agency") {
+  const agency = type === "agency";
+  const d = await publicGql(agency ? "FeaturedAgencies" : "FeaturedRecruiters", { country: DIRECTORY_COUNTRY });
+  const r = agency ? d?.sourcr?.featuredAgencies : d?.sourcr?.featuredRecruiters;
+  return clean({
+    type: agency ? "agency" : "recruiter",
+    featured: true,
+    total: r?.pagination?.totalItems,
+    results: (r?.items ?? []).map(directoryRow),
+  });
+}
+
 export async function recruiterFilters() {
   const f = (await publicGql("GetFiltersData"))?.sourcr?.searchFilters;
   return {
@@ -119,10 +133,12 @@ export async function recruiterFilters() {
   };
 }
 
+const directorySlug = (s: string) => s.trim().replace(/^https?:\/\/[^/]+\/recruiters\/(?:recruiter|agency)\//, "").split(/[/?#]/)[0];
+
 export async function recruiterProfile(p: {
-  slug: string; type?: "recruiter" | "agency"; section?: "profile" | "reviews" | "jobs" | "placements" | "team"; page?: number; pageSize?: number;
+  slug: string; type?: "recruiter" | "agency"; section?: "profile" | "reviews" | "jobs" | "placements" | "team" | "awards"; page?: number; pageSize?: number;
 }) {
-  const slug = p.slug.trim().replace(/^https?:\/\/[^/]+\/recruiters\/(?:recruiter|agency)\//, "").split(/[/?#]/)[0];
+  const slug = directorySlug(p.slug);
   const agency = p.type === "agency";
   const type = agency ? "AGENCY" : "RECRUITER";
   const pagination = page(p.page, p.pageSize ?? 10);
@@ -141,7 +157,7 @@ export async function recruiterProfile(p: {
         website: prof.website,
         recommended: prof.isRecommended,
         placementsTotal: prof.reviewsInsight?.placementCount,
-        awards: s?.awards?.items?.map((a: any) => clean({ name: a.name, years: a.years, result: a.result, source: a.source })),
+        awards: s?.awards?.items?.map(awardRow),
         recentPlacements: s?.paginatedPlacements?.items?.map(placementRow),
         openJobs: s?.paginatedJobs?.items?.map(jobRow),
         team: s?.paginatedRecruiters?.items?.map(directoryRow),
@@ -179,6 +195,11 @@ export async function recruiterProfile(p: {
       const r = d?.sourcr?.paginatedRecruiters;
       return { total: r?.pagination?.totalItems, recruiters: (r?.items ?? []).map(directoryRow) };
     }
+    case "awards": {
+      const d = await publicGql("GetSourcrAwards", { slug, type, limit: Math.min(p.pageSize ?? 20, 50) });
+      const r = d?.sourcr?.awards;
+      return { total: r?.totalItems ?? 0, awards: (r?.items ?? []).map(awardRow) };
+    }
   }
 }
 
@@ -186,6 +207,8 @@ const placementRow = (pl: any) =>
   clean({ title: pl.jobTitle, type: pl.jobType, salary: pl.salaryRange, category: pl.category?.name, location: [pl.address?.city, pl.address?.state].filter(Boolean).join(", ") || undefined });
 const jobRow = (j: any) =>
   clean({ id: j.jobId ?? j.id, title: j.title, location: j.location, posted: j.createdAt?.dateTime, url: j.url });
+const AWARD_SOURCES: Record<string, string> = { sara: "SEEK Annual Recruitment Awards", sourcr: "Recognition In Service Excellence" };
+const awardRow = (a: any) => clean({ name: a.name, years: a.years, result: a.result, source: AWARD_SOURCES[a.source] ?? a.source });
 
 
 
@@ -197,7 +220,7 @@ export async function contactRecruiter(p: {
   const d = await send({
     input: {
       message: p.message.trim(),
-      slug: p.slug,
+      slug: directorySlug(p.slug),
       type: p.type === "agency" ? "AGENCY" : "RECRUITER",
       name: p.name,
       email: p.email,
@@ -210,4 +233,39 @@ export async function contactRecruiter(p: {
   const err = r?.errors?.[0];
   if (err || r?.__typename === "ContactRecruiterFailure") throw new Error(`Seek did not send the message: ${err?.message ?? err?.code ?? "rejected"}`);
   return { sent: true, to: p.slug, confirmation: r?.message ?? null };
+}
+
+async function contactLimits() {
+  const d = await sgql("GetContactCapabilities");
+  return (d?.sourcr?.contactCapabilities?.capabilities ?? []).map((c: any) =>
+    clean({ type: c.type, enabled: c.enabled, used: c.activeCount, max: c.maxActive, windowHours: c.ttlHours, reason: c.reasonCode }),
+  ) as Array<{ type?: string; enabled?: boolean; used?: number; max?: number; windowHours?: number; reason?: string }>;
+}
+
+export async function callRecruiter(p: { slug: string; type?: "recruiter" | "agency" }) {
+  if (!isSignedIn()) throw new NotLoggedInError("Seek shows a recruiter's number for a call only to signed-in users, and records the call against the account");
+  const slug = directorySlug(p.slug);
+  const agency = p.type === "agency";
+  const d = await publicGql(agency ? "SeekDirectoryAgencyProfileDetails" : "SeekDirectoryRecruiterProfileDetails", {
+    slug, visitorId: VISITOR_ID, type: agency ? "AGENCY" : "RECRUITER", limit: 1,
+  }, { partialOk: true });
+  const prof = agency ? d?.sourcr?.agencyProfileDetails : d?.sourcr?.recruiterProfileDetails;
+  if (!prof) throw new Error(`No ${agency ? "agency" : "recruiter"} "${slug}" in Seek's recruiter directory`);
+  if (!prof.contactNumber) throw new Error(`${prof.name ?? slug} has no phone number in Seek's directory; use method "email"`);
+  const limits = await contactLimits();
+  const capped = limits.filter((c) => !c.enabled);
+  if (!limits.length || capped.length) {
+    const detail = capped.map((c) => `${c.type}: ${c.used ?? "?"} of ${c.max ?? "?"} in ${c.windowHours ?? "?"}h${c.reason ? ` (${c.reason})` : ""}`).join("; ");
+    throw new Error(`Seek's recruiter-contact limit stops this call${detail ? `: ${detail}` : " (no contact allowance on the account)"}`);
+  }
+  const r = await sgql("ContactRecruiterByCall");
+  return clean({
+    slug,
+    name: prof.name,
+    phone: prof.contactNumber,
+    recorded: true,
+    message: r?.contactRecruiterByCall?.message,
+    note: "Seek recorded the call against this account's recruiter-contact limit; nobody was called. Ring the number yourself.",
+    limits: await contactLimits().catch(() => undefined),
+  });
 }

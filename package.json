@@ -1,7 +1,7 @@
 {
   "name": "seek-mcp",
-  "version": "0.4.0",
-  "description": "MCP server for Seek NZ (nz.seek.com): job search, full ads, companies and reviews, career advice and salaries, recruiters, people search, your whole profile, résumés, saved jobs and searches, notifications and applying — over Seek's own HTTP API, no browser",
+  "version": "0.5.0",
+  "description": "MCP server for Seek NZ (nz.seek.com): job search, full ads, companies and reviews, career advice and salaries, Career Compass, recruiters, people search, your whole profile, résumés, saved jobs and searches, the home feed and Seek's AI job assessments, notifications and applying — over Seek's own HTTP API, no browser",
   "scripts": {
     "build": "tsc",
     "start": "node dist/server.js",

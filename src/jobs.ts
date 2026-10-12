@@ -1,8 +1,31 @@
 import { randomUUID } from "node:crypto";
+import { searchFilters } from "./api.js";
 import { NotLoggedInError, isSignedIn, sgql } from "./auth.js";
 import {
-  COUNTRY, LANGUAGE, LOCALE, ORIGIN, SESSION_ID, TIMEZONE, VISITOR_ID, ZONE, assertJobId, clean, htmlToText, publicGql,
+  COUNTRY, LANGUAGE, LOCALE, ORIGIN, PLATFORM, SESSION_ID, TIMEZONE, UA, VISITOR_ID, ZONE, assertJobId, clean, htmlToText,
+  publicGql,
 } from "./seek.js";
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+export async function poll<T>(
+  first: T,
+  next: (current: T) => Promise<T>,
+  waitFor: (current: T) => number | null | undefined,
+  budgetMs = 40_000,
+): Promise<T> {
+  const deadline = Date.now() + budgetMs;
+  let current = first;
+  for (let round = 0; round < 30; round++) {
+    const ms = waitFor(current);
+    if (ms == null) return current;
+    const wait = Math.min(Math.max(ms, 250), 5_000);
+    if (Date.now() + wait > deadline) return current;
+    await sleep(wait);
+    current = await next(current);
+  }
+  return current;
+}
 
 const detailVars = (jobId: string, isAuthenticated: boolean) => ({
   jobId,
@@ -132,9 +155,41 @@ const shapeMatch = (m: any) =>
       })
     : null;
 
+const fitState = (f: any): string | undefined =>
+  f.__typename?.replace(/^(?:Create)?CandidateJobMatch(?:StrongFit|StandOut)/, "") ||
+  (f.matchStrengths != null || f.threeWaysToStandOut != null || f.personalSummary != null ? "Exists"
+    : f.waitForMs != null ? "InProgress"
+    : f.qualifiers ? "NotEligible"
+    : f.retryAfter ? "AllocationExhausted"
+    : f.createdAt ? "ResultInvalid"
+    : f.message ? "Unavailable"
+    : undefined);
+
+const shapeFit = (f: any) =>
+  f
+    ? clean({
+        state: fitState(f),
+        matchStrengths: f.matchStrengths,
+        threeWaysToStandOut: f.threeWaysToStandOut,
+        personalSummary: f.personalSummary,
+        createdAt: f.createdAt,
+        retryInMs: f.waitForMs,
+        retryAfter: f.retryAfter,
+        message: f.message,
+        qualifiers: f.qualifiers,
+      })
+    : null;
+
+type Fit = "strongFit" | "standOut";
+
+async function readFit(jobId: string, which: Fit) {
+  const d = await sgql(which === "strongFit" ? "CandidateJobMatchStrongFit" : "CandidateJobMatchStandOut", { jobDetailsId: jobId }, { partialOk: true });
+  return d?.jobDetails?.personalised?.fit?.[which] ?? null;
+}
+
 export async function jobInsights(id: string) {
   const jobId = assertJobId(id);
-  const [pers, skills, match, detail] = await Promise.all([
+  const [pers, skills, match, detail, strongFit, standOut] = await Promise.all([
     sgql("jobDetailsPersonalised", {
       id: jobId, zone: ZONE, locale: LOCALE, languageCode: LANGUAGE, timezone: TIMEZONE,
       enableGetCandidateJobMatch: true, enableSalaryTransparencyOptimisation: true, enableCandidateAgentSuggestions: true,
@@ -142,6 +197,8 @@ export async function jobInsights(id: string) {
     sgql("GetMatchedQualities", { jobDetailsId: jobId, locale: LOCALE }, { partialOk: true }).catch(() => null),
     sgql("CandidateJobMatch", { jobDetailsId: jobId, enableGetAllocation: true }, { partialOk: true }).catch(() => null),
     sgql("GetAppliedJobDetail", { jobId, locale: LOCALE }, { partialOk: true }).catch(() => null),
+    readFit(jobId, "strongFit").catch(() => null),
+    readFit(jobId, "standOut").catch(() => null),
   ]);
   const p = pers?.jobDetails?.personalised ?? {};
   const ms = skills?.jobDetails?.personalised?.matchedSkills;
@@ -157,6 +214,8 @@ export async function jobInsights(id: string) {
     salaryMatch: sm ? { eligibility: sm.jobSalaryMatchEligibility, ...sm.salaryMatchResult } : undefined,
     jobMatch: shapeMatch(match?.jobDetails?.personalised?.candidateJobMatch ?? p.candidateJobMatch),
     jobMatchAllowance: match?.viewer?.candidateJobMatchAllocation?.message,
+    strongFit: shapeFit(strongFit),
+    standOut: shapeFit(standOut),
     seekSuggestions: p.candidateAgentSuggestions,
     applicants: (detail?.jobDetails?.insights ?? []).map((i: any) => i.message ?? i.count ?? i.percentage),
     documentsSent: detail?.viewer?.appliedJob?.documents
@@ -174,6 +233,55 @@ export async function requestJobMatch(id: string) {
     input: { jobId, channel: "chalice", platform: "WEB", visitorId: VISITOR_ID },
   });
   return { jobId, ...shapeMatch(data?.createCandidateJobMatchRequest) };
+}
+
+export async function requestJobFit(id: string, want: { strongFit?: boolean; standOut?: boolean }) {
+  const jobId = assertJobId(id);
+  const input = { jobId, experimentContext: { channel: "chalice", platform: PLATFORM, visitorId: VISITOR_ID, language: LANGUAGE } };
+  const deadline = Date.now() + 40_000;
+  const settle = (which: Fit, first: any) => poll(first, () => readFit(jobId, which), (f) => f?.waitForMs, deadline - Date.now());
+  const out: Record<string, unknown> = { jobId };
+  let strong: any = null;
+  if (want.strongFit) {
+    strong = await settle(
+      "strongFit",
+      (await sgql("createCandidateJobMatchStrongFitRequest", { input }))?.createCandidateJobMatchStrongFitRequest ?? null,
+    );
+    out.strongFit = shapeFit(strong);
+  }
+  if (want.standOut) {
+    out.standOut = want.strongFit && strong?.matchStrengths == null
+      ? { state: "NotRequested", message: "Stand out needs a finished strong fit, and this strong-fit request has none (see strongFit)" }
+      : shapeFit(await settle(
+          "standOut",
+          (await sgql("createCandidateJobMatchStandOutRequest", { input }))?.createCandidateJobMatchStandOutRequest ?? null,
+        ));
+  }
+  return clean(out);
+}
+
+export async function searchRefinements(query: string, where?: string, count?: number) {
+  const keywords = query.trim();
+  if (!keywords) throw new Error("Give the search keywords to refine");
+  const url = new URL("/api/jobsearch/v5/search", ORIGIN);
+  const params = { siteKey: "NZ-Main", locale: LOCALE, page: "1", pageSize: "20", ...searchFilters({ keywords, where }), include: "asyncpills,pills" };
+  for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
+  const r = await fetch(url, { headers: { accept: "application/json", "user-agent": UA } });
+  if (!r.ok) throw new Error(`Seek search returned HTTP ${r.status}`);
+  const s = (await r.json()) as any;
+  const token = s?.suggestions?.asyncPillsToken;
+  const assist = token
+    ? (await publicGql("GetJobSearchAssist", { visitorId: VISITOR_ID, tokens: [token] }, { partialOk: true }))
+        ?.jobSearchAssist?.pills?.data ?? []
+    : [];
+  const pill = (p: any) => clean({ label: p.label, keywords: p.keywords, active: p.isActive || undefined, stateToken: p.stateToken });
+  return clean({
+    keywords,
+    where: s?.location?.description,
+    jobs: s?.totalCount,
+    searchAssist: assist.slice(0, count).map(pill),
+    related: (s?.suggestions?.pills ?? []).slice(0, count).map(pill),
+  });
 }
 
 export const REPORT_REASONS = ["Fraudulent", "Discrimination", "Misleading", "SalaryBelowMinimumWage"] as const;

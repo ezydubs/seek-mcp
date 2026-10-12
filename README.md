@@ -53,14 +53,14 @@ That last quote is the problem this solves. Writing the fortieth tailored cover 
 
 ## Features
 
-- **Search and read without signing in**: keywords, location, work type, work arrangement (on-site, hybrid, remote), classification and subclassification, listing date, salary, one advertiser or one company; counts by work type and arrangement. Full ads come with the employer's screening questions, contact details in the ad, badges, the advertiser's history on Seek and the company's rating.
-- **Companies**: profile, culture, perks and awards, employee ratings by category, Seek's AI summary of reviews, every review (filter by location, sort by recent or helpful), salary ranges by role, and the company's open jobs.
-- **Career advice and salaries**: Seek's career guide for any role (what it's like, duties, skills, how to become one, satisfaction and hours, growth, similar roles), salary insight New Zealand-wide or by region, annual or hourly, by industry, role reviews, careers by classification and the advice articles.
-- **Recruiters and people**: the recruiter and agency directory (search by placements, specialisation and region; profiles, reviews, jobs, placements, teams; contact a recruiter) and People search over public candidate profiles.
+- **Search and read without signing in**: keywords, location, work type, work arrangement (on-site, hybrid, remote), classification and subclassification, listing date, salary, one advertiser or one company; counts by work type and arrangement; Seek's refinement pills for a search. Full ads come with the employer's screening questions, contact details in the ad, badges, the advertiser's history on Seek and the company's rating.
+- **Companies**: profile, culture, perks and awards, employee ratings by category, Seek's AI summary of reviews, every review (filter by location, sort by recent or helpful), salary ranges by role, the company's open jobs and its Graduates tab; browse companies by industry.
+- **Career advice and salaries**: Seek's career guide for any role (what it's like, duties, skills, how to become one, satisfaction and hours, growth, similar roles), salary insight New Zealand-wide or by region, annual or hourly, by industry, role reviews, career pathways to next roles with live job counts, roles that use given skills, role counts by industry and interest theme, careers by classification, the advice articles (latest, featured, popular, by category) and the Career Compass quiz with its AI recommendations.
+- **Recruiters and people**: the recruiter and agency directory (search by placements, specialisation and region; featured recruiters and agencies; profiles, reviews, jobs, placements, teams and awards; email a recruiter or record a call) and People search over public candidate profiles.
 - **Apply natively**: the same `submitApplication` mutation the website sends, with résumé, a written or uploaded cover letter, written or uploaded selection criteria, the profile's most recent role, every employer question answered by exact option id, and optional strong interest (priority apply). Dry-run mode prepares everything and sends nothing. Off-site jobs can be recorded in Applied jobs.
 - **Answer employer questions deliberately**: human-readable answers are matched against the live questionnaire and must resolve to exactly one option; anything unmatched, ambiguous or duplicated is an error rather than a guess. Standing answers fill the standard work-rights, notice-period and salary questions.
-- **The whole profile**: personal details, summary, career history (add, edit, delete, accept or dismiss résumé suggestions), education, licences and certifications, skills (with Seek's suggestions), languages, next-role preferences (availability, work types, locations, classification, role titles, salary, rights to work), approachability, visibility, photo, profile strength, activity and verifications; résumés (upload with Seek's virus scan, delete, set default, download, generate one from the profile).
-- **Your activity**: saved jobs, saved searches and their email alerts, notes on saved and applied jobs, applied jobs with the documents sent and applicant insights, priority-apply credits, recommendations and "not interested" feedback, Seek's AI job-match assessment.
+- **The whole profile**: personal details, summary, career history (add, edit, delete, accept or dismiss résumé suggestions), education, licences and certifications, skills (with Seek's suggestions), languages, next-role preferences (availability, work types, locations, classification, role titles, salary, rights to work), approachability, visibility, photo, profile strength and Seek's suggestions, activity and verifications (verified licences and qualifications are edited the way Seek allows); résumés (upload with Seek's virus scan, delete, set default, download, generate one from the profile).
+- **Your activity**: saved jobs, saved searches and their email alerts, notes on saved and applied jobs, applied jobs with the documents sent and applicant insights, priority-apply credits, recommendations and "not interested" feedback, the home feed (AI job summaries, market insights for your role and location, profile performance) and refining recommendations by answering Seek's questions, the salary and market-insight prompts, and Seek's AI assessments of a job (job match, strong fit, how to stand out).
 - **Settings**: email and push notification preferences, changing the sign-in email, and (guarded) deleting the account.
 - **Self-renewing sign-in**: a one-time hand-over from your own Chrome profile, then automatic renewal; tokens live in a mode-600 file outside the repo.
 
@@ -125,7 +125,7 @@ There is no username/password or email-code sign-in for the server: Seek's ident
 
 ## Tools
 
-58 tools. "no" in the sign-in column means it works without an account.
+62 tools. "no" in the sign-in column means it works without an account.
 
 ### Jobs
 
@@ -134,18 +134,21 @@ There is no username/password or email-code sign-in for the server: Seek's ident
 | `seek_search` | no | Search ads. `keywords`, `where`, `workType[]`, `workArrangement[]` (on_site/hybrid/remote), `classification[]`/`subclassification[]` ids, `listedWithinDays`, `salaryMin`/`salaryMax`/`salaryType`, `advertiserId`, `companyId` (organisation id), `page`, `pageSize` (≤100), `sort`. Returns facets and flags paid placements (`promoted`). |
 | `seek_job` | no | Full ad: description, advertiser, location, salary, work type and arrangement, classification, dates, status, bullets, badges, the employer's questions, contact details, company profile summary, `externalApply`. Signed in it adds the applicant count and salary match. |
 | `seek_similar_jobs` | no | The jobs Seek recommends alongside an ad. |
-| `seek_suggest` | no | Autocomplete and id lookup: keywords, search locations, profile locations (numeric ids), role titles, companies, schools, qualifications, skills, licences, languages (ontology ids), rights to work. |
+| `seek_suggest` | no | Autocomplete and id lookup: keywords, search locations, profile locations (numeric ids), role titles, companies, schools, qualifications, skills, licences, languages (ontology ids), rights to work; `search_refinements` gives Seek's refinement pills for a search (`query` = keywords, optional `where`), each with the keywords to search next. |
 | `seek_classifications` | no | Classifications and subclassifications with ids, and the availability, work-type and visibility options. |
-| `seek_job_insights` | yes | Saved/applied, matched/inferred/missing skills, salary match, applicant insights, Seek's AI job-match assessment (`requestAiMatch` runs it). |
+| `seek_job_insights` | yes | Saved/applied, matched/inferred/missing skills, salary match, applicant insights, and Seek's AI assessments: job match, strong fit (the candidate's strengths for the role) and stand out (three ways to stand out, a tailored summary). `requestAiMatch`, `requestStrongFit` and `requestStandOut` run them; each uses one of the account's AI allowances. |
 | `seek_report_job` | either | Report an ad (Fraudulent, Discrimination, Misleading, SalaryBelowMinimumWage). Needs `confirm: true`. |
 | `seek_recommended_jobs` | yes | The recommended-jobs feed, with each job's "not interested" reasons. |
 | `seek_job_feedback` | yes | Hide jobs by those reasons, unhide, or list what is hidden. |
+| `seek_home_feed` | yes | The home feed: recommended jobs with AI summaries and "not interested" reasons, company highlights, market insights for a role and location (open roles, ad-volume trend; `market` reads another), profile performance, the salary prompt and `recsServiceToken`. `refinementToken` shows a refined feed; `careerInsights` adds Seek's career-insight suggestions. The feed often holds 100 or more jobs, so they come 20 at a time (`page`, `pageSize`) with `totalJobs`. |
+| `seek_refine_recommendations` | yes | Seek's questions for better recommendations; `answers` submits them and returns the re-ranked jobs and a `refinementToken`; `followUp` asks follow-up questions instead. |
+| `seek_home_nudges` | yes | The salary prompt and the market-insights role and location; `salaryAnswer`, `marketInsights` (role URI + location id), `confirmProfileUpToDate`. |
 
 ### Applying and activity
 
 | Tool | Sign-in | What it does |
 |---|---|---|
-| `seek_apply_requirements` | yes | `externalApply`, `alreadyApplied`, `saved`, `selectionCriteriaRequired`, and every employer question with its kind, text and exact options. |
+| `seek_apply_requirements` | yes | `externalApply`, `alreadyApplied`, `saved`, `selectionCriteriaRequired`, every employer question with its kind, text and exact options, and `verificationNudges` (Seek's prompts to verify an identity or credential for the job, with the link). |
 | `seek_apply` | yes | Prepare (`submit: false`) or send (`submit: true`) an application. See [Applying safely](#applying-safely). |
 | `seek_apply_external` | yes | Record an off-site job in Applied jobs and get the employer's application address. |
 | `seek_standing_answers` | — | Read or set the standing answers (see below). |
@@ -160,13 +163,13 @@ There is no username/password or email-code sign-in for the server: Seek's ident
 
 | Tool | Sign-in | What it does |
 |---|---|---|
-| `seek_profile` | yes | Account id and email, name, phone, location, résumés and roles; `sections` adds any of summary, roles, suggestedRoles, education, suggestedEducation, licences, skills, suggestedSkills, languages, availability, workTypes, preferredLocations, preferredClassification, preferredRoleTitles, salary, rightsToWork, approachable, visibility, avatar, strength, activity, verifications, references, publicProfile (or `all`). |
+| `seek_profile` | yes | Account id and email, name, phone, location, résumés and roles; `sections` adds any of summary, roles, suggestedRoles, education, suggestedEducation, licences, skills, suggestedSkills, languages, availability, workTypes, preferredLocations, preferredClassification, preferredRoleTitles, salary, rightsToWork, approachable, visibility, avatar, strength, suggestions, activity, verifications, references, publicProfile, resumePrivacy (or `all`). Verified licences and qualifications carry `verified: true`. |
 | `seek_profile_update` | yes | First/last name, phone (`countryCallingCodeId`, NZ = `"159"`) and optionally `locationId` (omit to keep the current one). |
 | `seek_profile_summary` | yes | The personal summary. |
 | `seek_add_role` | yes | Add a career-history role, or pass an existing `id` to update it. |
 | `seek_role_manage` | yes | Delete a role, or accept / dismiss a role suggested from a résumé. |
-| `seek_education` | yes | Add, update, delete, accept or dismiss qualifications. |
-| `seek_licence` | yes | Add, update or delete licences and certifications. |
+| `seek_education` | yes | Add, update, delete, accept or dismiss qualifications. A verified one only takes `highlights`; deleting it is refused with the verifier's link. |
+| `seek_licence` | yes | Add, update or delete licences and certifications. A verified one only takes `description`; deleting it is refused with the verifier's link. |
 | `seek_skills` | yes | List (with suggestions), set, add or remove skills. |
 | `seek_language` | yes | Add or delete languages. |
 | `seek_preferences` | yes | Read or set availability, work types, preferred locations, classification, role titles, minimum salary, rights to work, approachability and visibility. |
@@ -190,8 +193,8 @@ There is no username/password or email-code sign-in for the server: Seek's ident
 
 | Tool | Sign-in | What it does |
 |---|---|---|
-| `seek_company_search` | no | Company profiles by name, with ids, ratings and review counts. |
-| `seek_company` | no | Profile, ratings by category, AI review summary, `organisationId`. |
+| `seek_company_search` | no | Company profiles by name, with ids, ratings and review counts; `industry` (an id such as `I0008`, or a name) browses an industry's companies, and `industries` lists them. |
+| `seek_company` | no | Profile, ratings by category, AI review summary, `organisationId`, `industryId`; `section: "graduates"` gives the Graduates tab (programmes, application steps, stories, videos, graduate jobs). |
 | `seek_company_reviews` | no | Reviews, by page, sorted by recent or helpful, optionally for one location. |
 | `seek_company_salaries` | no | Salary ranges by role against the industry. |
 | `seek_company_jobs` | no | The company's open jobs. |
@@ -202,19 +205,20 @@ There is no username/password or email-code sign-in for the server: Seek's ident
 | Tool | Sign-in | What it does |
 |---|---|---|
 | `seek_career_search` | no | Roles and advice articles; `suggest` for quick role completions. |
-| `seek_career_role` | no | The career guide for a role. |
+| `seek_career_role` | no (`reason`: yes) | The career guide for a role, with live job counts by `region`; `section` `pathways` (next roles, optionally in a `differentField` or within a salary lift, with open jobs for each), `jobs` (the latest Seek jobs for the role), `reason` (why Career Compass recommended it). |
 | `seek_career_salary` | no | Salary insight for a role, nationwide or by region, annual or hourly, by industry. |
 | `seek_career_reviews` | no | What people in the role say about it. |
-| `seek_career_explore` | no | Classifications, or a classification's roles. |
-| `seek_career_article` | no | Read an article, or list the latest. |
+| `seek_career_explore` | no | Classifications, or a classification's roles; `skills` finds roles that use given skills; `counts` counts roles by industry and interest `theme`, with salary, satisfaction and growth filters. |
+| `seek_career_article` | no | Read an article, or list the latest, `featured` or `popular` ones, or a `category`'s. |
+| `seek_career_quiz` | last step | Seek's Career Compass quiz one `step` at a time with the `answers` so far; the last step returns AI role recommendations with reasons, and `reason`, `hide` and `unhide` act on one. The recommendations and those actions need a sign-in. |
 
 ### Recruiters and people
 
 | Tool | Sign-in | What it does |
 |---|---|---|
-| `seek_recruiter_search` | no | Recruiters or agencies by name, placements, specialisations, role types and region; `filters` lists the values. |
-| `seek_recruiter` | no | A recruiter's or agency's profile, reviews, jobs, placements or team. |
-| `seek_contact_recruiter` | either | Message a recruiter through the directory. Needs `confirm: true`. |
+| `seek_recruiter_search` | no | Recruiters or agencies by name, placements, specialisations, role types and region; `filters` lists the values; `featured` gives the directory's featured recruiters or agencies. |
+| `seek_recruiter` | no | A recruiter's or agency's profile, reviews, jobs, placements, team or awards. |
+| `seek_contact_recruiter` | either | `method: "email"` messages a recruiter through the directory; `method: "call"` (signed in) records the call the way the site's Call button does and returns the number to ring. Needs `confirm: true`. |
 | `seek_people_search` | no | Public candidate profiles by name, narrowed by role titles, companies and locations. |
 | `seek_person` | no | One public profile. |
 
